@@ -1,0 +1,31 @@
+export type OrderStatus =
+  | 'payment_pending'
+  | 'paid'
+  | 'accepted'
+  | 'preparing'
+  | 'ready'
+  | 'picked_up'
+  | 'cancel_requested'
+  | 'cancelled';
+
+export type OrderItem = {
+  id: number;
+  menu_name: string;
+  temperature: 'HOT' | 'ICE';
+  extra_shot: boolean;
+  soy_milk: boolean;
+  personal_tumbler: boolean;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+};
+
+export type Order = {
+  id: string;
+  order_number: string;
+  status: OrderStatus;
+  payment_status: 'pending' | 'paid' | 'cancelled' | 'refunded' | 'failed';
+  total_amount: number;
+  created_at: string;
+  order_items: OrderItem[];
+};
