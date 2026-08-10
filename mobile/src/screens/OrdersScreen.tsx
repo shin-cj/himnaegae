@@ -46,7 +46,7 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
     setError(null);
     const { data, error: queryError } = await supabase
       .from('orders')
-      .select('id, order_number, status, payment_status, total_amount, created_at, order_items(id, menu_name, temperature, extra_shot, soy_milk, personal_tumbler, quantity, unit_price, line_total)')
+      .select('id, order_number, status, payment_status, total_amount, pickup_at, pickup_type, created_at, order_items(id, menu_name, temperature, extra_shot, soy_milk, personal_tumbler, quantity, unit_price, line_total)')
       .order('created_at', { ascending: false });
 
     if (queryError) setError('주문 내역을 불러오지 못했어요.');
@@ -101,6 +101,13 @@ function OrderCard({ order }: { order: Order }) {
         <View><Text style={styles.orderNumber}>주문번호 {order.order_number}</Text><Text style={styles.date}>{date}</Text></View>
         <Text style={[styles.status, order.status === 'ready' && styles.ready]}>{statusLabel[order.status]}</Text>
       </View>
+      {order.pickup_at ? (
+        <View style={styles.pickupTimeRow}>
+          <Text style={styles.pickupTimeIcon}>⏰</Text>
+          <Text style={styles.pickupTimeLabel}>픽업 예정</Text>
+          <Text style={styles.pickupTimeValue}>{order.pickup_type === 'asap' ? '바로 갈게요!' : formatPickupTime(order.pickup_at)}</Text>
+        </View>
+      ) : null}
       {isCancelled ? (
         <View style={styles.cancelledBox}><Text style={styles.cancelledText}>{statusLabel[order.status]}</Text></View>
       ) : (
@@ -123,6 +130,10 @@ function OrderCard({ order }: { order: Order }) {
       ) : null}
     </View>
   );
+}
+
+function formatPickupTime(value: string) {
+  return new Date(value).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
 }
 
 function OrderProgress({ status }: { status: OrderStatus }) {
@@ -176,6 +187,10 @@ const styles = StyleSheet.create({
   date: { marginTop: 5, color: colors.muted, fontSize: 12 },
   status: { overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#F5EDE5', color: colors.orange, fontSize: 12, fontWeight: '900' },
   ready: { backgroundColor: colors.mint, color: '#3C7B4A' },
+  pickupTimeRow: { marginTop: 15, minHeight: 42, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', borderRadius: 13, backgroundColor: '#FFF5EC' },
+  pickupTimeIcon: { marginRight: 7, fontSize: 15 },
+  pickupTimeLabel: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+  pickupTimeValue: { flex: 1, color: colors.orange, fontSize: 13, fontWeight: '900', textAlign: 'right' },
   progress: { marginTop: 22, marginBottom: 5 },
   progressRail: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 },
   progressPart: { flex: 1, flexDirection: 'row', alignItems: 'center' },

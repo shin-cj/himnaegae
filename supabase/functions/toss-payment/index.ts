@@ -62,14 +62,20 @@ export default {
       }
 
       const { items, clientKey } = body;
+      const pickupType = body.pickup_type === 'asap' ? 'asap' : 'scheduled';
+      const pickupAt = new Date(body.pickup_at);
       if (!Array.isArray(items) || items.length < 1 || items.length > 30 || !String(clientKey).startsWith('test_ck_')) {
         return json({ error: '결제 정보가 올바르지 않아요.' }, 400);
+      }
+      if (Number.isNaN(pickupAt.getTime()) || pickupAt.getTime() < Date.now() - 5 * 60 * 1000 || pickupAt.getTime() > Date.now() + 24 * 60 * 60 * 1000) {
+        return json({ error: '픽업 시간을 다시 선택해주세요.' }, 400);
       }
       const total = items.reduce((sum: number, item: any) => sum + Number(item.unit_price) * Number(item.quantity), 0);
       if (!Number.isInteger(total) || total < 100) return json({ error: '결제 금액이 올바르지 않아요.' }, 400);
 
       const { data: order, error: orderError } = await admin.from('orders').insert({
         user_id: authData.user.id, status: 'payment_pending', payment_status: 'pending', total_amount: total,
+        pickup_at: pickupAt.toISOString(), pickup_type: pickupType,
       }).select('id, order_number').single();
       if (orderError) throw orderError;
 
@@ -88,6 +94,8 @@ export default {
         amount: total,
         orderName,
         customerEmail: authData.user.email ?? '',
+        pickupAt: pickupAt.toISOString(),
+        pickupType,
         successUrl: `${functionUrl}?action=success`,
         failUrl: `${functionUrl}?action=fail`,
       });

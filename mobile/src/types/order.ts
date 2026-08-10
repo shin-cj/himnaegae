@@ -26,6 +26,8 @@ export type Order = {
   status: OrderStatus;
   payment_status: 'pending' | 'paid' | 'cancelled' | 'refunded' | 'failed';
   total_amount: number;
+  pickup_at: string | null;
+  pickup_type: 'asap' | 'scheduled' | null;
   created_at: string;
   order_items: OrderItem[];
 };

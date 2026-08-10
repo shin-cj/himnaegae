@@ -25,6 +25,13 @@ function defaultCustomPickupTime() {
   return time;
 }
 
+function resolvePickupTime(choice: PickupChoice, customTime: Date) {
+  if (choice !== 'custom') return new Date(Date.now() + choice * 60 * 1000);
+  const pickupTime = new Date(customTime);
+  if (pickupTime.getTime() < Date.now()) pickupTime.setDate(pickupTime.getDate() + 1);
+  return pickupTime;
+}
+
 export default function App() {
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
@@ -107,8 +114,9 @@ function AppContent() {
             setPaying(true);
             const tossClientKey = process.env.EXPO_PUBLIC_TOSS_CLIENT_KEY;
             if (!tossClientKey) throw new Error('토스 클라이언트 키가 없어요.');
+            const pickupAt = resolvePickupTime(pickupDelay, customPickupTime);
             const { data, error } = await supabase.functions.invoke('toss-payment', {
-              body: { clientKey: tossClientKey, items: cart.map((item) => ({
+              body: { clientKey: tossClientKey, pickup_at: pickupAt.toISOString(), pickup_type: pickupDelay === 0 ? 'asap' : 'scheduled', items: cart.map((item) => ({
                 menu_id: item.menuId,
                 menu_name: item.menuName,
                 temperature: item.temperature,
