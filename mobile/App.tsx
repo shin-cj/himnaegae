@@ -15,6 +15,8 @@ import { MyScreen } from './src/screens/MyScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
 import { TossPaymentScreen, type TossPaymentSession } from './src/screens/TossPaymentScreen';
 import { supabase } from './src/lib/supabase';
+import { addNotificationTapListener, showReadyNotification, usesExpoGo } from './src/lib/notifications';
+import { formatOrderNumber } from './src/lib/order-number';
 import type { CartItem, Menu, MenuSelection } from './src/types/menu';
 import type { StoreSettings } from './src/types/store';
 
@@ -167,6 +169,29 @@ function AppContent() {
     pagerRef.current?.setPage(index);
   };
 
+  useEffect(() => {
+    const subscription = addNotificationTapListener(() => openTab('orders'));
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel(`customer-order-alerts-${user.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'orders', filter: `user_id=eq.${user.id}`,
+      }, (payload) => {
+        const changedOrder = payload.new as { order_number?: string; status?: string };
+        setOrdersRefreshToken((current) => current + 1);
+        if (changedOrder.status === 'ready' && changedOrder.order_number && usesExpoGo()) {
+          void showReadyNotification(changedOrder.order_number);
+        }
+      })
+      .subscribe();
+
+    return () => { void supabase.removeChannel(channel); };
+  }, [user]);
+
   const payForTestOrder = () => {
     if (storeSettings.businessStatus !== 'open') {
       Alert.alert(storeSettings.businessStatus === 'paused' ? '지금은 주문을 잠시 쉬고 있어요' : '오늘 영업이 끝났어요', '매장이 주문을 다시 시작하면 이용해주세요.');
@@ -243,7 +268,7 @@ function AppContent() {
       setCartVisible(false);
       setOrdersRefreshToken((current) => current + 1);
       openTab('orders');
-      Alert.alert('토스 테스트 결제 완료', completedSession?.orderNumber ? `주문번호 ${completedSession.orderNumber}` : '주문이 정상적으로 저장됐어요.');
+      Alert.alert('토스 테스트 결제 완료', completedSession?.orderNumber ? `주문번호 ${formatOrderNumber(String(completedSession.orderNumber))}` : '주문이 정상적으로 저장됐어요.');
     } catch (error) {
       Alert.alert('결제 승인 실패', error instanceof Error ? error.message : '다시 시도해주세요.');
     } finally {

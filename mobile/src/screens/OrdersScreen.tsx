@@ -3,6 +3,7 @@ import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
+import { formatOrderNumber } from '../lib/order-number';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme/colors';
 import type { Order, OrderItem, OrderStatus } from '../types/order';
@@ -179,7 +180,7 @@ function OrderCard({ order, cancelling, onCancel }: { order: Order; cancelling: 
   return (
     <View style={styles.orderCard}>
       <View style={styles.orderTop}>
-        <View><Text style={styles.orderNumber}>주문번호 {order.order_number}</Text><Text style={styles.date}>{date}</Text></View>
+        <View><Text style={styles.orderNumber}>주문번호 {formatOrderNumber(order.order_number)}</Text><Text style={styles.date}>{date}</Text></View>
         <Text style={[styles.status, order.status === 'ready' && styles.ready]}>{statusLabel[order.status]}</Text>
       </View>
       {order.pickup_at && !isHistory ? (

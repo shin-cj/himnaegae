@@ -2,7 +2,7 @@
 
 import type { Session } from '@supabase/supabase-js';
 import Link from 'next/link';
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 
@@ -61,6 +61,11 @@ export default function Home() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accessDenied, setAccessDenied] = useState(false);
+  const [alertsEnabled, setAlertsEnabled] = useState(false);
+  const [alertToast, setAlertToast] = useState<{ title: string; body: string } | null>(null);
+  const alertsEnabledRef = useRef(false);
+  const knownOrderStatusRef = useRef(new Map<string, OrderStatus>());
+  const initialOrdersLoadedRef = useRef(false);
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -72,7 +77,12 @@ export default function Home() {
 
     if (queryError) setError('주문을 불러오지 못했어요. 잠시 후 다시 시도해주세요.');
     else {
-      setOrders((data ?? []) as AdminOrder[]);
+      const nextOrders = (data ?? []) as AdminOrder[];
+      if (!initialOrdersLoadedRef.current) {
+        nextOrders.forEach((order) => knownOrderStatusRef.current.set(order.id, order.status));
+        initialOrdersLoadedRef.current = true;
+      }
+      setOrders(nextOrders);
       setError(null);
     }
     setLoading(false);
@@ -82,6 +92,14 @@ export default function Home() {
     void supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
     return () => listener.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const enabled = window.localStorage.getItem('himnaegae-admin-alerts') === 'on'
+      && typeof Notification !== 'undefined'
+      && Notification.permission === 'granted';
+    alertsEnabledRef.current = enabled;
+    window.queueMicrotask(() => setAlertsEnabled(enabled));
   }, []);
 
   useEffect(() => {
@@ -102,6 +120,39 @@ export default function Home() {
     return () => { active = false; window.clearInterval(timer); };
   }, [loadOrders, session]);
 
+  useEffect(() => {
+    if (!session || accessDenied) return;
+
+    const notifyAdmin = (title: string, body: string) => {
+      setAlertToast({ title, body });
+      window.setTimeout(() => setAlertToast(null), 6000);
+      if (!alertsEnabledRef.current) return;
+      playAlertSound();
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        new Notification(title, { body, icon: '/favicon.ico', tag: title + body });
+      }
+    };
+
+    const channel = supabase
+      .channel('admin-live-order-alerts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        const order = payload.new as { id?: string; order_number?: string; status?: OrderStatus };
+        if (!order.id || !order.status) return;
+        const previousStatus = knownOrderStatusRef.current.get(order.id);
+        knownOrderStatusRef.current.set(order.id, order.status);
+
+        if (order.status === 'paid' && previousStatus !== 'paid') {
+          notifyAdmin('새 주문이 들어왔어요! ☕', `${order.order_number ? formatOrderNumber(order.order_number) : '신규 주문'}을 확인해주세요.`);
+        } else if (order.status === 'cancel_requested' && previousStatus !== 'cancel_requested') {
+          notifyAdmin('주문 취소 요청', `${order.order_number ? formatOrderNumber(order.order_number) : '주문'}의 취소 요청을 확인해주세요.`);
+        }
+        void loadOrders();
+      })
+      .subscribe();
+
+    return () => { void supabase.removeChannel(channel); };
+  }, [accessDenied, loadOrders, session]);
+
   const visibleOrders = useMemo(() => orders.filter((order) => {
     if (filter === 'all') return true;
     if (filter === 'active') return isActive(order.status);
@@ -120,20 +171,59 @@ export default function Home() {
     ? orders.filter((order) => isNew(order.status)).length
     : orders.filter((order) => order.status === key).length;
 
+  const enableAdminAlerts = async () => {
+    if (typeof Notification === 'undefined') {
+      setError('이 브라우저에서는 알림을 지원하지 않아요. 최신 Chrome을 사용해주세요.');
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    const enabled = permission === 'granted';
+    window.localStorage.setItem('himnaegae-admin-alerts', enabled ? 'on' : 'off');
+    alertsEnabledRef.current = enabled;
+    setAlertsEnabled(enabled);
+    if (enabled) {
+      playAlertSound();
+      setAlertToast({ title: '주문 알림을 켰어요', body: '새 주문과 취소 요청이 오면 소리로 알려드릴게요.' });
+      window.setTimeout(() => setAlertToast(null), 4000);
+    } else {
+      setError('Chrome 주소창 왼쪽의 사이트 설정에서 알림을 허용해주세요.');
+    }
+  };
+
   const advanceOrder = async (orderId: string, currentStatus: OrderStatus, status: OrderStatus) => {
     setUpdatingId(orderId);
-    const changes = status === 'cancelled'
-      ? { status, cancelled_at: new Date().toISOString() }
-      : { status };
+    if (status === 'cancelled') {
+      const { error: cancelPaymentError } = await supabase.functions.invoke('cancel-payment', {
+        body: { orderId, cancelReason: '고객 요청으로 주문 취소' },
+      });
+      if (cancelPaymentError) {
+        setError('결제 취소에 실패했어요. 토스 결제 내역을 확인해주세요.');
+        setUpdatingId(null);
+        return;
+      }
+      knownOrderStatusRef.current.set(orderId, status);
+      const { error: notificationError } = await supabase.functions.invoke('send-order-notification', { body: { orderId } });
+      if (notificationError) setError('결제는 취소됐지만 고객 푸시 알림 전송에 실패했어요.');
+      await loadOrders();
+      setUpdatingId(null);
+      return;
+    }
     const { data: updatedOrder, error: updateError } = await supabase
       .from('orders')
-      .update(changes)
+      .update({ status })
       .eq('id', orderId)
       .eq('status', currentStatus)
       .select('id')
       .maybeSingle();
     if (updateError) setError('주문 상태를 변경하지 못했어요.');
     else if (!updatedOrder) setError('고객 요청으로 주문 상태가 먼저 바뀌었어요. 새로고침 후 확인해주세요.');
+    else {
+      knownOrderStatusRef.current.set(orderId, status);
+      if (status === 'ready') {
+        const { error: notificationError } = await supabase.functions.invoke('send-order-notification', { body: { orderId } });
+        if (notificationError) setError('상태는 변경됐지만 고객 푸시 알림 전송에 실패했어요.');
+      }
+    }
     await loadOrders();
     setUpdatingId(null);
   };
@@ -152,7 +242,7 @@ export default function Home() {
       <main className="main">
         <header className="topbar">
           <div><p className="overline">HIMNAEGAE COFFEE</p><h1>주문 관리</h1><p>주문과 픽업 시간을 한눈에 확인하세요.</p></div>
-          <div className="header-actions"><div className="live-badge"><span className="online-dot" />실제 주문 연결됨</div><button className="logout" onClick={() => void supabase.auth.signOut()}>로그아웃</button></div>
+          <div className="header-actions"><button className={`alert-toggle ${alertsEnabled ? 'enabled' : ''}`} onClick={() => void enableAdminAlerts()}>{alertsEnabled ? '🔔 알림 켜짐' : '🔕 알림 켜기'}</button><div className="live-badge"><span className="online-dot" />실시간 주문 연결됨</div><button className="logout" onClick={() => void supabase.auth.signOut()}>로그아웃</button></div>
         </header>
 
         <section className="stats" aria-label="오늘의 주문 현황">
@@ -170,7 +260,7 @@ export default function Home() {
           <div className="order-grid">
             {visibleOrders.length ? visibleOrders.map((order) => (
               <article className={`order-card ${statusTone(order.status)}`} key={order.id}>
-                <div className="order-head"><div><strong>{order.order_number}</strong><span>{formatOrderTime(order.created_at)} 주문</span></div><span className={`status ${statusTone(order.status)}`}>{statusText[order.status]}</span></div>
+                <div className="order-head"><div><strong>{formatOrderNumber(order.order_number)}</strong><span>{formatOrderTime(order.created_at)} 주문</span></div><span className={`status ${statusTone(order.status)}`}>{statusText[order.status]}</span></div>
                 <div className={`pickup ${order.pickup_type === 'asap' ? 'asap' : ''}`}><span>⏰</span><div><small>고객 픽업 예정</small><strong>{formatPickup(order)}</strong></div></div>
                 <div className="items">{order.order_items.map((item) => <div className="item" key={item.id}><div><strong>{item.menu_name} <b>× {item.quantity}</b></strong><span>{formatOptions(item)}</span></div></div>)}</div>
                 <div className="order-foot"><div><small>결제금액</small><strong>{won(order.total_amount)}</strong></div>{nextStatus[order.status] ? <button disabled={updatingId === order.id} onClick={() => void advanceOrder(order.id, order.status, nextStatus[order.status]!.status)}>{updatingId === order.id ? '변경 중...' : nextStatus[order.status]!.label}<span>→</span></button> : <span className="completed">{statusText[order.status]}</span>}</div>
@@ -179,6 +269,7 @@ export default function Home() {
           </div>
         </section>
       </main>
+      {alertToast ? <button className="order-alert-toast" onClick={() => setAlertToast(null)}><span>🔔</span><div><strong>{alertToast.title}</strong><p>{alertToast.body}</p></div></button> : null}
     </div>
   );
 }
@@ -217,3 +308,31 @@ function statusTone(status: OrderStatus) {
 function formatOrderTime(value: string) { return new Date(value).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }); }
 function formatPickup(order: AdminOrder) { if (order.pickup_type === 'asap') return '바로 픽업'; return order.pickup_at ? formatOrderTime(order.pickup_at) : '시간 미지정'; }
 function formatOptions(item: OrderItem) { return [item.temperature, item.extra_shot && '샷 추가', item.soy_milk && '두유 변경', item.personal_tumbler && '개인 텀블러'].filter(Boolean).join(' · '); }
+function formatOrderNumber(value: string) { const match = /^A-\d{8}-(\d+)$/.exec(value); return match ? `A-${match[1]}` : value; }
+
+function playAlertSound() {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const context = new AudioContextClass();
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.24, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.65);
+    gain.connect(context.destination);
+    [0, 0.2].forEach((delay, index) => {
+      const oscillator = context.createOscillator();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = index === 0 ? 740 : 988;
+      oscillator.connect(gain);
+      oscillator.start(context.currentTime + delay);
+      oscillator.stop(context.currentTime + delay + 0.28);
+    });
+    window.setTimeout(() => void context.close(), 1000);
+  } catch {
+    // 브라우저가 소리를 막더라도 화면 알림은 계속 표시합니다.
+  }
+}
+
+declare global {
+  interface Window { webkitAudioContext: typeof AudioContext }
+}
