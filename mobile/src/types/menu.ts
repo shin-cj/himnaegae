@@ -9,6 +9,7 @@ export type Menu = {
   name: string;
   description: string;
   price: number;
+  imageUrl?: string;
   temperature?: MenuTemperature;
   tag?: 'BEST' | 'NEW';
 };

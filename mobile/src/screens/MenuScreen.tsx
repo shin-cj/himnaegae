@@ -5,11 +5,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { CartButton } from '../components/CartButton';
 import { MenuCard } from '../components/MenuCard';
-import { menuCategories, menus } from '../data/menus';
+import { menuCategories } from '../data/menus';
 import { colors } from '../theme/colors';
 import type { Menu } from '../types/menu';
 
 type MenuScreenProps = {
+  menus: Menu[];
   cartCount: number;
   cartTotal: number;
   onSelectMenu: (menu: Menu) => void;
@@ -17,7 +18,7 @@ type MenuScreenProps = {
   onOpenCart: () => void;
 };
 
-export function MenuScreen({ cartCount, cartTotal, onSelectMenu, onBack, onOpenCart }: MenuScreenProps) {
+export function MenuScreen({ menus, cartCount, cartTotal, onSelectMenu, onBack, onOpenCart }: MenuScreenProps) {
   const pagerRef = useRef<PagerView>(null);
   const insets = useSafeAreaInsets();
   const [categoryIndex, setCategoryIndex] = useState(0);
@@ -67,7 +68,7 @@ export function MenuScreen({ cartCount, cartTotal, onSelectMenu, onBack, onOpenC
                 ) : (
                   <View style={styles.empty}>
                     <Text style={styles.emptyTitle}>메뉴를 입력해주세요</Text>
-                    <Text style={styles.emptyText}>src/data/menus.ts에 이 카테고리의 메뉴를 추가하면 여기에 표시됩니다.</Text>
+                    <Text style={styles.emptyText}>관리자 페이지에서 메뉴를 추가하거나 품절을 해제하면 여기에 표시됩니다.</Text>
                   </View>
                 )}
               </ScrollView>

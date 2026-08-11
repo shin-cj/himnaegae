@@ -4,11 +4,13 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { CartButton } from '../components/CartButton';
 import { MenuCard } from '../components/MenuCard';
-import { menus } from '../data/menus';
 import { colors } from '../theme/colors';
 import type { Menu } from '../types/menu';
+import type { StoreSettings } from '../types/store';
 
 type HomeScreenProps = {
+  menus: Menu[];
+  storeSettings: StoreSettings;
   cartCount: number;
   cartTotal: number;
   onSelectMenu: (menu: Menu) => void;
@@ -43,7 +45,7 @@ const banners = [
   },
 ];
 
-export function HomeScreen({ cartCount, cartTotal, onSelectMenu, onOpenMenu, onOpenCart }: HomeScreenProps) {
+export function HomeScreen({ menus, storeSettings, cartCount, cartTotal, onSelectMenu, onOpenMenu, onOpenCart }: HomeScreenProps) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [bannerIndex, setBannerIndex] = useState(0);
@@ -56,13 +58,15 @@ export function HomeScreen({ cartCount, cartTotal, onSelectMenu, onOpenMenu, onO
         <View style={styles.header}>
           <View>
             <Text style={styles.eyebrow}>픽업 주문</Text>
-            <Text style={styles.logo}>힘내개</Text>
+            <Text style={styles.logo}>{storeSettings.storeName}</Text>
           </View>
-          <View style={styles.openBadge}>
-            <View style={styles.openDot} />
-            <Text style={styles.openText}>영업 중</Text>
+          <View style={[styles.openBadge, storeSettings.businessStatus !== 'open' && styles.closedBadge]}>
+            <View style={[styles.openDot, storeSettings.businessStatus !== 'open' && styles.closedDot]} />
+            <Text style={[styles.openText, storeSettings.businessStatus !== 'open' && styles.closedText]}>{storeSettings.businessStatus === 'open' ? '영업 중' : storeSettings.businessStatus === 'paused' ? '주문 잠시 중지' : '영업 종료'}</Text>
           </View>
         </View>
+
+        {storeSettings.notice ? <View style={styles.notice}><Text style={styles.noticeIcon}>📢</Text><Text style={styles.noticeText}>{storeSettings.notice}</Text></View> : null}
 
         <View style={styles.bannerArea}>
           <ScrollView
@@ -108,8 +112,8 @@ export function HomeScreen({ cartCount, cartTotal, onSelectMenu, onOpenMenu, onO
         <View style={styles.orderInfo}>
           <Text style={styles.orderInfoIcon}>⏱</Text>
           <View>
-            <Text style={styles.orderInfoTitle}>예상 픽업 10~15분</Text>
-            <Text style={styles.orderInfoText}>준비가 끝나면 알림을 보내드려요.</Text>
+            <Text style={styles.orderInfoTitle}>예상 픽업 {storeSettings.pickupMin}~{storeSettings.pickupMax}분</Text>
+            <Text style={styles.orderInfoText}>{storeSettings.pickupGuide}</Text>
           </View>
         </View>
       </ScrollView>
@@ -130,6 +134,9 @@ const styles = StyleSheet.create({
   openBadge: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: colors.mint, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20 },
   openDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#3F9B55' },
   openText: { color: '#317440', fontSize: 12, fontWeight: '800' },
+  closedBadge: { backgroundColor: '#EFE8E3' },
+  closedDot: { backgroundColor: '#8E8179' },
+  closedText: { color: '#746861' },
   bannerArea: { marginBottom: 30 },
   hero: { minHeight: 190, overflow: 'hidden', borderRadius: 26, padding: 24 },
   heroKicker: { color: '#FFD9C8', fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
@@ -139,6 +146,9 @@ const styles = StyleSheet.create({
   bannerDots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 10 },
   bannerDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#D7CCC3' },
   activeBannerDot: { width: 18, backgroundColor: colors.orange },
+  notice: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: -14, marginBottom: 24, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 15, backgroundColor: '#FFF0E9' },
+  noticeIcon: { fontSize: 16 },
+  noticeText: { flex: 1, color: '#9C4D31', fontSize: 12, lineHeight: 18, fontWeight: '700' },
   sectionHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
   sectionTitle: { color: colors.dark, fontSize: 21, fontWeight: '900' },
   viewAllButton: { minHeight: 40, justifyContent: 'center', paddingHorizontal: 8, marginRight: -8 },

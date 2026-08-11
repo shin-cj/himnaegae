@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
@@ -21,6 +21,13 @@ const statusLabel: Record<OrderStatus, string> = {
 };
 
 const progressSteps = ['주문 접수', '제조 중', '픽업 준비'] as const;
+type OrderFilter = 'active' | 'completed' | 'cancelled';
+
+const filterLabels: { key: OrderFilter; label: string }[] = [
+  { key: 'active', label: '진행 중' },
+  { key: 'completed', label: '완료' },
+  { key: 'cancelled', label: '취소' },
+];
 
 const progressIndex: Record<OrderStatus, number> = {
   payment_pending: 0,
@@ -38,7 +45,9 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
   const { loading: authLoading, user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<OrderFilter>('active');
 
   const loadOrders = useCallback(async () => {
     if (!user) return;
@@ -59,6 +68,52 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
     else setOrders([]);
   }, [loadOrders, refreshToken, user]);
 
+  const requestCancellation = useCallback((order: Order) => {
+    Alert.alert(
+      '주문을 취소할까요?',
+      '매장에서 제조를 시작하기 전까지 취소를 요청할 수 있어요.',
+      [
+        { text: '아니요', style: 'cancel' },
+        {
+          text: '취소 요청',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setCancellingId(order.id);
+              setError(null);
+              const { data: cancelStatus, error: cancelError } = await supabase.rpc('request_order_cancel', { p_order_id: order.id });
+              if (cancelError) {
+                setError(cancelError.message.includes('CANCELLATION_NOT_ALLOWED')
+                  ? '이미 제조가 시작되어 앱에서 취소할 수 없어요. 매장에 문의해주세요.'
+                  : '취소 요청을 보내지 못했어요. 다시 시도해주세요.');
+              } else {
+                await loadOrders();
+                Alert.alert(
+                  cancelStatus === 'cancelled' ? '주문 취소 완료' : '취소 요청 완료',
+                  cancelStatus === 'cancelled' ? '결제 확인 중이던 주문을 취소했어요.' : '매장에서 확인한 뒤 주문 상태에 반영돼요.',
+                );
+              }
+              setCancellingId(null);
+            })();
+          },
+        },
+      ],
+    );
+  }, [loadOrders]);
+
+  const groupedOrders = useMemo(() => ({
+    active: orders.filter((order) => order.status !== 'picked_up' && order.status !== 'cancelled'),
+    completed: orders.filter((order) => order.status === 'picked_up'),
+    cancelled: orders.filter((order) => order.status === 'cancelled'),
+  }), [orders]);
+
+  const visibleOrders = groupedOrders[filter];
+  const emptyCopy: Record<OrderFilter, { title: string; description: string }> = {
+    active: { title: '진행 중인 주문이 없어요', description: '새 주문을 하면 준비 상태가 이곳에 표시돼요.' },
+    completed: { title: '완료된 주문이 없어요', description: '픽업이 끝난 주문을 이곳에서 확인할 수 있어요.' },
+    cancelled: { title: '취소된 주문이 없어요', description: '취소가 완료된 주문이 이곳에 모여요.' },
+  };
+
   if (!authLoading && !user) {
     return (
       <View style={[styles.center, { paddingTop: insets.top }]}>
@@ -75,33 +130,59 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
         <Text style={styles.eyebrow}>MY ORDERS</Text>
         <Text style={styles.title}>주문 내역</Text>
       </View>
+      <View style={styles.filterBar}>
+        {filterLabels.map((item) => (
+          <Pressable key={item.key} onPress={() => setFilter(item.key)} style={[styles.filterButton, filter === item.key && styles.filterButtonSelected]}>
+            <Text style={[styles.filterText, filter === item.key && styles.filterTextSelected]}>{item.label}</Text>
+            <View style={[styles.filterCount, filter === item.key && styles.filterCountSelected]}>
+              <Text style={[styles.filterCountText, filter === item.key && styles.filterCountTextSelected]}>{groupedOrders[item.key].length}</Text>
+            </View>
+          </Pressable>
+        ))}
+      </View>
       <ScrollView
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={loadOrders} tintColor={colors.orange} />}
       >
         {error ? <Pressable onPress={loadOrders} style={styles.messageCard}><Text style={styles.error}>{error} 눌러서 다시 시도해주세요.</Text></Pressable> : null}
-        {!loading && !error && orders.length === 0 ? (
+        {!loading && !error && visibleOrders.length === 0 ? (
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>아직 주문 내역이 없어요</Text>
-            <Text style={styles.emptyText}>결제가 완료되면 주문과 픽업 상태가 이곳에 표시돼요.</Text>
+            <Text style={styles.emptyTitle}>{emptyCopy[filter].title}</Text>
+            <Text style={styles.emptyText}>{emptyCopy[filter].description}</Text>
           </View>
         ) : null}
-        {orders.map((order) => <OrderCard key={order.id} order={order} />)}
+        {visibleOrders.map((order) => (
+          <OrderCard
+            key={order.id}
+            order={order}
+            cancelling={cancellingId === order.id}
+            onCancel={() => requestCancellation(order)}
+          />
+        ))}
       </ScrollView>
     </View>
   );
 }
 
-function OrderCard({ order }: { order: Order }) {
+function OrderCard({ order, cancelling, onCancel }: { order: Order; cancelling: boolean; onCancel: () => void }) {
   const date = new Date(order.created_at).toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   const isCancelled = order.status === 'cancelled' || order.status === 'cancel_requested';
+  const isCompleted = order.status === 'picked_up';
+  const isHistory = order.status === 'cancelled' || isCompleted;
+  const canCancel = order.status === 'payment_pending' || order.status === 'paid' || order.status === 'accepted';
+  const showCancelArea = !isCancelled && order.status !== 'picked_up';
+  const cancelHint = order.status === 'payment_pending'
+    ? '완료되지 않은 결제 주문을 취소할 수 있어요'
+    : canCancel
+      ? '제조 시작 전까지만 취소할 수 있어요'
+      : '제조가 시작되어 취소할 수 없어요';
   return (
     <View style={styles.orderCard}>
       <View style={styles.orderTop}>
         <View><Text style={styles.orderNumber}>주문번호 {order.order_number}</Text><Text style={styles.date}>{date}</Text></View>
         <Text style={[styles.status, order.status === 'ready' && styles.ready]}>{statusLabel[order.status]}</Text>
       </View>
-      {order.pickup_at ? (
+      {order.pickup_at && !isHistory ? (
         <View style={styles.pickupTimeRow}>
           <Text style={styles.pickupTimeIcon}>⏰</Text>
           <Text style={styles.pickupTimeLabel}>픽업 예정</Text>
@@ -110,6 +191,8 @@ function OrderCard({ order }: { order: Order }) {
       ) : null}
       {isCancelled ? (
         <View style={styles.cancelledBox}><Text style={styles.cancelledText}>{statusLabel[order.status]}</Text></View>
+      ) : isCompleted ? (
+        <View style={styles.completedBox}><Text style={styles.completedIcon}>✓</Text><Text style={styles.completedText}>픽업이 완료된 주문이에요</Text></View>
       ) : (
         <OrderProgress status={order.status} />
       )}
@@ -122,10 +205,18 @@ function OrderCard({ order }: { order: Order }) {
       <View style={styles.divider} />
       {order.order_items.map((item) => <OrderItemRow key={item.id} item={item} />)}
       <View style={styles.totalRow}><Text style={styles.totalLabel}>총 결제금액</Text><Text style={styles.total}>{won(order.total_amount)}</Text></View>
-      {!isCancelled && order.status !== 'picked_up' ? (
+      {showCancelArea ? (
         <View style={styles.actionRow}>
-          <View style={styles.cancelButton}><Text style={styles.cancelButtonText}>주문 취소</Text></View>
-          <Text style={styles.actionHint}>취소 기능은 관리자 연결 후 활성화돼요</Text>
+          <Pressable
+            disabled={!canCancel || cancelling}
+            onPress={onCancel}
+            style={({ pressed }) => [styles.cancelButton, pressed && canCancel && styles.cancelButtonPressed, (!canCancel || cancelling) && styles.cancelButtonDisabled]}
+          >
+            <Text style={[styles.cancelButtonText, !canCancel && styles.cancelButtonTextDisabled]}>
+              {cancelling ? '요청 중...' : canCancel ? '주문 취소' : '취소 불가'}
+            </Text>
+          </Pressable>
+          <Text style={styles.actionHint}>{cancelHint}</Text>
         </View>
       ) : null}
     </View>
@@ -172,6 +263,15 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 22, paddingBottom: 16 },
   eyebrow: { color: colors.orange, fontSize: 12, fontWeight: '900', letterSpacing: 1.3 },
   title: { marginTop: 5, color: colors.dark, fontSize: 27, fontWeight: '900' },
+  filterBar: { marginHorizontal: 20, marginBottom: 15, padding: 5, flexDirection: 'row', borderRadius: 17, backgroundColor: '#EFE4D8' },
+  filterButton: { flex: 1, minHeight: 43, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 13 },
+  filterButtonSelected: { backgroundColor: colors.white, shadowColor: '#6E5140', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 7, elevation: 2 },
+  filterText: { color: '#8D7C70', fontSize: 13, fontWeight: '800' },
+  filterTextSelected: { color: colors.dark, fontWeight: '900' },
+  filterCount: { minWidth: 20, height: 20, marginLeft: 5, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#DED0C3' },
+  filterCountSelected: { backgroundColor: '#FFF0E9' },
+  filterCountText: { color: '#8D7C70', fontSize: 10, fontWeight: '900' },
+  filterCountTextSelected: { color: colors.orange },
   content: { flexGrow: 1, paddingHorizontal: 20, paddingBottom: 125 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, paddingBottom: 90, backgroundColor: colors.cream },
   empty: { alignItems: 'center', paddingTop: 100, paddingHorizontal: 22 },
@@ -211,6 +311,9 @@ const styles = StyleSheet.create({
   pickupText: { marginTop: 3, color: '#54815C', fontSize: 11 },
   cancelledBox: { marginTop: 16, padding: 13, borderRadius: 14, backgroundColor: '#F5F1ED' },
   cancelledText: { color: colors.muted, textAlign: 'center', fontSize: 13, fontWeight: '800' },
+  completedBox: { marginTop: 16, padding: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#EAF5E8' },
+  completedIcon: { width: 22, height: 22, marginRight: 7, borderRadius: 11, backgroundColor: '#71A979', color: colors.white, fontSize: 12, fontWeight: '900', textAlign: 'center', lineHeight: 22 },
+  completedText: { color: '#4D7653', fontSize: 13, fontWeight: '800' },
   divider: { height: 1, marginVertical: 17, backgroundColor: '#F0E7DE' },
   itemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 13, gap: 12 },
   itemInfo: { flex: 1 },
@@ -222,6 +325,9 @@ const styles = StyleSheet.create({
   total: { color: colors.dark, fontSize: 17, fontWeight: '900' },
   actionRow: { marginTop: 15, flexDirection: 'row', alignItems: 'center' },
   cancelButton: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 11, borderWidth: 1, borderColor: '#E6DCD3' },
+  cancelButtonPressed: { backgroundColor: '#F7F0EA' },
+  cancelButtonDisabled: { opacity: 0.55 },
   cancelButtonText: { color: colors.muted, fontSize: 12, fontWeight: '800' },
+  cancelButtonTextDisabled: { color: '#A99D94' },
   actionHint: { flex: 1, marginLeft: 10, color: '#AA9B91', fontSize: 10, textAlign: 'right' },
 });

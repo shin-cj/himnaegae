@@ -70,7 +70,38 @@ export default {
       if (Number.isNaN(pickupAt.getTime()) || pickupAt.getTime() < Date.now() - 5 * 60 * 1000 || pickupAt.getTime() > Date.now() + 24 * 60 * 60 * 1000) {
         return json({ error: '픽업 시간을 다시 선택해주세요.' }, 400);
       }
-      const total = items.reduce((sum: number, item: any) => sum + Number(item.unit_price) * Number(item.quantity), 0);
+
+      const menuIds = [...new Set(items.map((item: any) => Number(item.menu_id)))];
+      if (menuIds.some((id) => !Number.isInteger(id))) return json({ error: '메뉴 정보가 올바르지 않아요.' }, 400);
+      const { data: menuRows, error: menuError } = await admin
+        .from('menus')
+        .select('id,name,price,temperature,available')
+        .in('id', menuIds);
+      if (menuError) throw menuError;
+      const menuById = new Map((menuRows ?? []).map((menu) => [menu.id, menu]));
+
+      const normalizedItems = items.map((item: any) => {
+        const menu = menuById.get(Number(item.menu_id));
+        const quantity = Number(item.quantity);
+        const temperature = item.temperature === 'HOT' ? 'HOT' : item.temperature === 'ICE' ? 'ICE' : null;
+        if (!menu || !menu.available) throw new Error('품절되었거나 판매하지 않는 메뉴가 포함되어 있어요.');
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) throw new Error('메뉴 수량이 올바르지 않아요.');
+        if (!temperature || (menu.temperature !== 'BOTH' && menu.temperature !== temperature)) throw new Error(`${menu.name}의 온도 선택을 확인해주세요.`);
+        const extraShot = Boolean(item.extra_shot);
+        const personalTumbler = Boolean(item.personal_tumbler);
+        const unitPrice = menu.price + (extraShot ? 500 : 0) - (personalTumbler ? 200 : 0);
+        return {
+          menu_id: menu.id,
+          menu_name: menu.name,
+          temperature,
+          extra_shot: extraShot,
+          soy_milk: Boolean(item.soy_milk),
+          personal_tumbler: personalTumbler,
+          quantity,
+          unit_price: unitPrice,
+        };
+      });
+      const total = normalizedItems.reduce((sum: number, item) => sum + item.unit_price * item.quantity, 0);
       if (!Number.isInteger(total) || total < 100) return json({ error: '결제 금액이 올바르지 않아요.' }, 400);
 
       const { data: order, error: orderError } = await admin.from('orders').insert({
@@ -79,15 +110,11 @@ export default {
       }).select('id, order_number').single();
       if (orderError) throw orderError;
 
-      const rows = items.map((item: any) => ({
-        order_id: order.id, menu_id: Number(item.menu_id), menu_name: String(item.menu_name),
-        temperature: item.temperature, extra_shot: Boolean(item.extra_shot), soy_milk: Boolean(item.soy_milk),
-        personal_tumbler: Boolean(item.personal_tumbler), quantity: Number(item.quantity), unit_price: Number(item.unit_price),
-      }));
+      const rows = normalizedItems.map((item) => ({ order_id: order.id, ...item }));
       const { error: itemError } = await admin.from('order_items').insert(rows);
       if (itemError) { await admin.from('orders').delete().eq('id', order.id); throw itemError; }
 
-      const orderName = items.length > 1 ? `${items[0].menu_name} 외 ${items.length - 1}건` : items[0].menu_name;
+      const orderName = normalizedItems.length > 1 ? `${normalizedItems[0].menu_name} 외 ${normalizedItems.length - 1}건` : normalizedItems[0].menu_name;
       return json({
         orderId: order.id,
         orderNumber: order.order_number,

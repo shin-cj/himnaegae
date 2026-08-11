@@ -1,12 +1,12 @@
 import { StatusBar } from 'expo-status-bar';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Modal, StyleSheet, View } from 'react-native';
 import PagerView from 'react-native-pager-view';
 import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { BottomTabBar, type AppTab } from './src/components/BottomTabBar';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
-import { menus } from './src/data/menus';
+import { menus as fallbackMenus } from './src/data/menus';
 import { CartScreen, type PickupChoice } from './src/screens/CartScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { MenuDetailScreen } from './src/screens/MenuDetailScreen';
@@ -16,8 +16,14 @@ import { OrdersScreen } from './src/screens/OrdersScreen';
 import { TossPaymentScreen, type TossPaymentSession } from './src/screens/TossPaymentScreen';
 import { supabase } from './src/lib/supabase';
 import type { CartItem, Menu, MenuSelection } from './src/types/menu';
+import type { StoreSettings } from './src/types/store';
 
 const tabs: AppTab[] = ['home', 'menu', 'orders', 'my'];
+const defaultStoreSettings: StoreSettings = {
+  storeName: '힘내개 본점', businessStatus: 'open', notice: '', phone: '', address: '',
+  openTime: '09:00', closeTime: '20:00', pickupMin: 10, pickupMax: 15,
+  pickupGuide: '준비가 끝나면 알림을 보내드려요.',
+};
 
 function defaultCustomPickupTime() {
   const time = new Date(Date.now() + 20 * 60 * 1000);
@@ -55,6 +61,70 @@ function AppContent() {
   const [customPickupTime, setCustomPickupTime] = useState(defaultCustomPickupTime);
   const [paymentSession, setPaymentSession] = useState<TossPaymentSession | null>(null);
   const [ordersRefreshToken, setOrdersRefreshToken] = useState(0);
+  const [catalogMenus, setCatalogMenus] = useState<Menu[]>(fallbackMenus);
+  const [storeSettings, setStoreSettings] = useState<StoreSettings>(defaultStoreSettings);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadMenus = async () => {
+      const { data, error } = await supabase
+        .from('menus')
+        .select('id, category, emoji, name, description, price, temperature, tag, image_url')
+        .eq('available', true)
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true });
+
+      if (!active || error || !data) return;
+      setCatalogMenus(data.map((menu) => ({
+        id: menu.id,
+        category: menu.category,
+        emoji: menu.emoji,
+        name: menu.name,
+        description: menu.description,
+        price: menu.price,
+        temperature: menu.temperature,
+        tag: menu.tag ?? undefined,
+        imageUrl: menu.image_url ?? undefined,
+      })) as Menu[]);
+    };
+
+    void loadMenus();
+    const channel = supabase
+      .channel('customer-menu-catalog')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, loadMenus)
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadStoreSettings = async () => {
+      const { data, error } = await supabase.from('store_settings').select('*').eq('id', 1).single();
+      if (!active || error || !data) return;
+      setStoreSettings({
+        storeName: data.store_name,
+        businessStatus: data.business_status,
+        notice: data.notice,
+        phone: data.phone,
+        address: data.address,
+        openTime: String(data.open_time).slice(0, 5),
+        closeTime: String(data.close_time).slice(0, 5),
+        pickupMin: data.pickup_min,
+        pickupMax: data.pickup_max,
+        pickupGuide: data.pickup_guide,
+      });
+    };
+    void loadStoreSettings();
+    const channel = supabase.channel('customer-store-settings')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'store_settings' }, loadStoreSettings)
+      .subscribe();
+    return () => { active = false; void supabase.removeChannel(channel); };
+  }, []);
 
   const cartCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0), [cart]);
@@ -80,7 +150,7 @@ function AppContent() {
   };
 
   const editCartItem = (item: CartItem) => {
-    const menu = menus.find((candidate) => candidate.id === item.menuId);
+    const menu = catalogMenus.find((candidate) => candidate.id === item.menuId);
     if (!menu) return;
     setCartVisible(false);
     setEditingItem(item);
@@ -98,6 +168,10 @@ function AppContent() {
   };
 
   const payForTestOrder = () => {
+    if (storeSettings.businessStatus !== 'open') {
+      Alert.alert(storeSettings.businessStatus === 'paused' ? '지금은 주문을 잠시 쉬고 있어요' : '오늘 영업이 끝났어요', '매장이 주문을 다시 시작하면 이용해주세요.');
+      return;
+    }
     if (!user) {
       setCartVisible(false);
       openTab('my');
@@ -194,6 +268,8 @@ function AppContent() {
           >
             <View key="home" style={styles.page} collapsable={false}>
               <HomeScreen
+                menus={catalogMenus}
+                storeSettings={storeSettings}
                 cartCount={cartCount}
                 cartTotal={cartTotal}
                 onSelectMenu={setSelectedMenu}
@@ -203,6 +279,7 @@ function AppContent() {
             </View>
             <View key="menu" style={styles.page} collapsable={false}>
               <MenuScreen
+                menus={catalogMenus}
                 cartCount={cartCount}
                 cartTotal={cartTotal}
                 onSelectMenu={setSelectedMenu}

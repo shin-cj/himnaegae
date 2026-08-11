@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, type WebViewNavigation } from 'react-native-webview';
 
@@ -65,6 +65,15 @@ export function TossPaymentScreen({ session, onClose, onSuccess, onFail }: Props
 </html>`;
   }, [session]);
 
+  const openPaymentApp = (url: string) => {
+    void Linking.openURL(url).catch(() => {
+      Alert.alert(
+        '결제 앱을 열 수 없어요',
+        '카카오페이 앱이 설치되어 있는지 확인하거나 다른 결제수단을 선택해주세요.',
+      );
+    });
+  };
+
   const shouldLoad = (request: WebViewNavigation) => {
     if (request.url.startsWith(session.successUrl)) {
       const callback = new URL(request.url);
@@ -78,6 +87,10 @@ export function TossPaymentScreen({ session, onClose, onSuccess, onFail }: Props
     if (request.url.startsWith(session.failUrl)) {
       const callback = new URL(request.url);
       onFail(callback.searchParams.get('message') ?? '결제가 취소됐어요.');
+      return false;
+    }
+    if (!/^(https?:|about:|data:|blob:)/i.test(request.url)) {
+      openPaymentApp(request.url);
       return false;
     }
     return true;

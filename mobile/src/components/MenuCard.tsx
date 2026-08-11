@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors } from '../theme/colors';
 import type { Menu } from '../types/menu';
@@ -19,7 +19,7 @@ export function MenuCard({ menu, onPress }: MenuCardProps) {
       style={({ pressed }) => [styles.card, pressed && styles.pressedCard]}
     >
       <View style={styles.image}>
-        <Text style={styles.emoji}>{menu.emoji}</Text>
+        {menu.imageUrl ? <Image source={{ uri: menu.imageUrl }} style={styles.menuImage} resizeMode="cover" /> : <Text style={styles.emoji}>{menu.emoji}</Text>}
       </View>
       <View style={styles.info}>
         <View style={styles.titleRow}>
@@ -51,6 +51,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   image: { width: 72, height: 72, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: '#F6ECDD' },
+  menuImage: { width: '100%', height: '100%', borderRadius: 16 },
   emoji: { fontSize: 34 },
   info: { flex: 1, paddingHorizontal: 12 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },

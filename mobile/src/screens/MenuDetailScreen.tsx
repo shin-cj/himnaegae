@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors } from '../theme/colors';
@@ -44,7 +44,9 @@ export function MenuDetailScreen({ menu, onAddToCart, onClose, initialSelection,
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.menuImage}><Text style={styles.menuEmoji}>{menu.emoji}</Text></View>
+        <View style={styles.menuImage}>
+          {menu.imageUrl ? <Image source={{ uri: menu.imageUrl }} style={styles.menuPhoto} resizeMode="cover" /> : <Text style={styles.menuEmoji}>{menu.emoji}</Text>}
+        </View>
         <Text style={styles.menuName}>{menu.name}</Text>
         <Text style={styles.description}>{menu.description}</Text>
         <Text style={styles.basePrice}>{won(menu.price)}</Text>
@@ -127,6 +129,7 @@ const styles = StyleSheet.create({
   headerSpace: { width: 36 },
   content: { paddingHorizontal: 22, paddingBottom: 130 },
   menuImage: { height: 170, alignItems: 'center', justifyContent: 'center', borderRadius: 28, backgroundColor: '#F3E7D8', marginTop: 8 },
+  menuPhoto: { width: '100%', height: '100%', borderRadius: 28 },
   menuEmoji: { fontSize: 76 },
   menuName: { color: colors.dark, fontSize: 25, fontWeight: '900', marginTop: 22 },
   description: { color: colors.muted, fontSize: 14, marginTop: 8 },
