@@ -87,14 +87,18 @@ export default {
         if (!menu || !menu.available) throw new Error('품절되었거나 판매하지 않는 메뉴가 포함되어 있어요.');
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) throw new Error('메뉴 수량이 올바르지 않아요.');
         if (!temperature || (menu.temperature !== 'BOTH' && menu.temperature !== temperature)) throw new Error(`${menu.name}의 온도 선택을 확인해주세요.`);
-        const extraShot = Boolean(item.extra_shot);
+        const extraShotCount = Number(item.extra_shot_count ?? (item.extra_shot ? 1 : 0));
+        if (!Number.isInteger(extraShotCount) || extraShotCount < 0 || extraShotCount > 5) throw new Error('샷 추가 수량을 확인해주세요.');
+        const extraShot = extraShotCount > 0;
         const personalTumbler = Boolean(item.personal_tumbler);
-        const unitPrice = menu.price + (extraShot ? 500 : 0) - (personalTumbler ? 200 : 0);
+        const unitPrice = menu.price + extraShotCount * 500 - (personalTumbler ? 200 : 0);
         return {
           menu_id: menu.id,
           menu_name: menu.name,
           temperature,
           extra_shot: extraShot,
+          extra_shot_count: extraShotCount,
+          lightly: Boolean(item.lightly),
           soy_milk: Boolean(item.soy_milk),
           personal_tumbler: personalTumbler,
           quantity,

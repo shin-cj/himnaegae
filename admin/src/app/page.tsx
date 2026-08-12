@@ -14,6 +14,8 @@ type OrderItem = {
   menu_name: string;
   temperature: 'HOT' | 'ICE';
   extra_shot: boolean;
+  extra_shot_count: number;
+  lightly: boolean;
   soy_milk: boolean;
   personal_tumbler: boolean;
   quantity: number;
@@ -32,8 +34,8 @@ type AdminOrder = {
 };
 
 const statusText: Record<OrderStatus, string> = {
-  payment_pending: '결제 확인 중', paid: '신규 주문', accepted: '주문 접수', preparing: '제조 중',
-  ready: '픽업 준비', picked_up: '픽업 완료', cancel_requested: '취소 요청', cancelled: '주문 취소',
+  payment_pending: '결제 확인 중', paid: '접수 됨', accepted: '접수 됨', preparing: '제조 중',
+  ready: '픽업 준비 완료', picked_up: '픽업 완료', cancel_requested: '취소 요청', cancelled: '주문 취소',
 };
 
 const nextStatus: Partial<Record<OrderStatus, { status: OrderStatus; label: string }>> = {
@@ -45,8 +47,8 @@ const nextStatus: Partial<Record<OrderStatus, { status: OrderStatus; label: stri
 };
 
 const filters: { key: Filter; label: string }[] = [
-  { key: 'active', label: '진행 중' }, { key: 'new', label: '신규 주문' },
-  { key: 'preparing', label: '제조 중' }, { key: 'ready', label: '픽업 준비' }, { key: 'all', label: '전체' },
+  { key: 'active', label: '진행 중' }, { key: 'new', label: '접수 됨' },
+  { key: 'preparing', label: '제조 중' }, { key: 'ready', label: '픽업 준비 완료' }, { key: 'all', label: '전체' },
 ];
 
 const won = (value: number) => `${value.toLocaleString('ko-KR')}원`;
@@ -71,7 +73,7 @@ export default function Home() {
     setLoading(true);
     const { data, error: queryError } = await supabase
       .from('orders')
-      .select('id,order_number,status,payment_status,total_amount,pickup_at,pickup_type,created_at,order_items(id,menu_name,temperature,extra_shot,soy_milk,personal_tumbler,quantity)')
+      .select('id,order_number,status,payment_status,total_amount,pickup_at,pickup_type,created_at,order_items(id,menu_name,temperature,extra_shot,extra_shot_count,lightly,soy_milk,personal_tumbler,quantity)')
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -307,7 +309,7 @@ function statusTone(status: OrderStatus) {
 
 function formatOrderTime(value: string) { return new Date(value).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }); }
 function formatPickup(order: AdminOrder) { if (order.pickup_type === 'asap') return '바로 픽업'; return order.pickup_at ? formatOrderTime(order.pickup_at) : '시간 미지정'; }
-function formatOptions(item: OrderItem) { return [item.temperature, item.extra_shot && '샷 추가', item.soy_milk && '두유 변경', item.personal_tumbler && '개인 텀블러'].filter(Boolean).join(' · '); }
+function formatOptions(item: OrderItem) { return [item.temperature, item.extra_shot_count > 0 && `샷 추가 × ${item.extra_shot_count}`, item.lightly && '연하게', item.soy_milk && '두유 변경', item.personal_tumbler && '개인 텀블러'].filter(Boolean).join(' · '); }
 function formatOrderNumber(value: string) { const match = /^A-\d{8}-(\d+)$/.exec(value); return match ? `A-${match[1]}` : value; }
 
 function playAlertSound() {

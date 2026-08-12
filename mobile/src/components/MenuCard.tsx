@@ -11,12 +11,15 @@ type MenuCardProps = {
 const won = (price: number) => `${price.toLocaleString('ko-KR')}원`;
 
 export function MenuCard({ menu, onPress }: MenuCardProps) {
+  const soldOut = menu.available === false;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${menu.name} 상세 보기`}
+      accessibilityLabel={soldOut ? `${menu.name} 품절` : `${menu.name} 상세 보기`}
+      accessibilityState={{ disabled: soldOut }}
+      disabled={soldOut}
       onPress={() => onPress(menu)}
-      style={({ pressed }) => [styles.card, pressed && styles.pressedCard]}
+      style={({ pressed }) => [styles.card, soldOut && styles.soldOutCard, pressed && !soldOut && styles.pressedCard]}
     >
       <View style={styles.image}>
         {menu.imageUrl ? <Image source={{ uri: menu.imageUrl }} style={styles.menuImage} resizeMode="cover" /> : <Text style={styles.emoji}>{menu.emoji}</Text>}
@@ -29,8 +32,8 @@ export function MenuCard({ menu, onPress }: MenuCardProps) {
         <Text style={styles.description}>{menu.description}</Text>
         <Text style={styles.price}>{won(menu.price)}</Text>
       </View>
-      <View style={styles.addButton}>
-        <Text style={styles.addButtonText}>+</Text>
+      <View style={[styles.addButton, soldOut && styles.soldOutButton]}>
+        <Text style={[styles.addButtonText, soldOut && styles.soldOutText]}>{soldOut ? '품절' : '+'}</Text>
       </View>
     </Pressable>
   );
@@ -61,5 +64,8 @@ const styles = StyleSheet.create({
   price: { color: colors.dark, fontSize: 14, fontWeight: '900', marginTop: 7 },
   addButton: { width: 35, height: 35, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.dark },
   addButtonText: { color: colors.white, fontSize: 24, lineHeight: 27 },
+  soldOutCard: { opacity: 0.58 },
+  soldOutButton: { width: 44, borderRadius: 12, backgroundColor: '#E5DDD7' },
+  soldOutText: { color: '#8C817A', fontSize: 11, lineHeight: 16, fontWeight: '900' },
   pressedCard: { opacity: 0.72, transform: [{ scale: 0.99 }] },
 });

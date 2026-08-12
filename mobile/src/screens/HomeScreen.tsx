@@ -16,6 +16,7 @@ type HomeScreenProps = {
   onSelectMenu: (menu: Menu) => void;
   onOpenMenu: () => void;
   onOpenCart: () => void;
+  onOpenNotifications: () => void;
 };
 
 const banners = [
@@ -45,7 +46,7 @@ const banners = [
   },
 ];
 
-export function HomeScreen({ menus, storeSettings, cartCount, cartTotal, onSelectMenu, onOpenMenu, onOpenCart }: HomeScreenProps) {
+export function HomeScreen({ menus, storeSettings, cartCount, cartTotal, onSelectMenu, onOpenMenu, onOpenCart, onOpenNotifications }: HomeScreenProps) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [bannerIndex, setBannerIndex] = useState(0);
@@ -60,9 +61,14 @@ export function HomeScreen({ menus, storeSettings, cartCount, cartTotal, onSelec
             <Text style={styles.eyebrow}>픽업 주문</Text>
             <Text style={styles.logo}>{storeSettings.storeName}</Text>
           </View>
-          <View style={[styles.openBadge, storeSettings.businessStatus !== 'open' && styles.closedBadge]}>
-            <View style={[styles.openDot, storeSettings.businessStatus !== 'open' && styles.closedDot]} />
-            <Text style={[styles.openText, storeSettings.businessStatus !== 'open' && styles.closedText]}>{storeSettings.businessStatus === 'open' ? '영업 중' : storeSettings.businessStatus === 'paused' ? '주문 잠시 중지' : '영업 종료'}</Text>
+          <View style={styles.headerActions}>
+            <Pressable accessibilityRole="button" accessibilityLabel="알림함 열기" onPress={onOpenNotifications} hitSlop={8} style={({ pressed }) => [styles.bellButton, pressed && styles.pressed]}>
+              <Text style={styles.bellIcon}>🔔</Text>
+            </Pressable>
+            <View style={[styles.openBadge, storeSettings.businessStatus !== 'open' && styles.closedBadge]}>
+              <View style={[styles.openDot, storeSettings.businessStatus !== 'open' && styles.closedDot]} />
+              <Text style={[styles.openText, storeSettings.businessStatus !== 'open' && styles.closedText]}>{storeSettings.businessStatus === 'open' ? '영업 중' : storeSettings.businessStatus === 'paused' ? '주문 잠시 중지' : '영업 종료'}</Text>
+            </View>
           </View>
         </View>
 
@@ -131,6 +137,9 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
   eyebrow: { color: colors.orange, fontSize: 12, fontWeight: '800', letterSpacing: 1.4 },
   logo: { color: colors.dark, fontSize: 30, fontWeight: '900', marginTop: 2 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  bellButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19 },
+  bellIcon: { fontSize: 17 },
   openBadge: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: colors.mint, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20 },
   openDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#3F9B55' },
   openText: { color: '#317440', fontSize: 12, fontWeight: '800' },

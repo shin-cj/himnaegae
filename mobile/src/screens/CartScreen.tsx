@@ -146,7 +146,8 @@ function formatTime(date: Date) {
 
 function optionText(item: CartItem) {
   const options: string[] = [item.temperature];
-  if (item.extraShot) options.push('샷 추가');
+  if (item.extraShotCount > 0) options.push(`샷 추가 × ${item.extraShotCount}`);
+  if (item.lightly) options.push('연하게')
   if (item.soyMilk) options.push('두유 변경');
   if (item.personalTumbler) options.push('개인 텀블러');
   return options.join(' · ');
@@ -167,7 +168,7 @@ const styles = StyleSheet.create({
   edit: { color: colors.orange, fontSize: 11, fontWeight: '900' },
   itemBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 },
   quantityControl: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  quantityButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#F5EFE9' },
+  quantityButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#DDD2C8', borderRadius: 17, backgroundColor: 'transparent' },
   quantityButtonText: { color: colors.dark, fontSize: 19, fontWeight: '800' },
   disabledText: { color: '#C1B8B1' },
   quantity: { minWidth: 20, color: colors.dark, fontSize: 15, textAlign: 'center', fontWeight: '900' },

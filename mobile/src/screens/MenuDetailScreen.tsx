@@ -18,20 +18,21 @@ const won = (price: number) => `${price.toLocaleString('ko-KR')}원`;
 export function MenuDetailScreen({ menu, onAddToCart, onClose, initialSelection, submitLabel = '장바구니 담기' }: MenuDetailScreenProps) {
   const allowedTemperature: MenuTemperature = menu.temperature ?? 'BOTH';
   const [temperature, setTemperature] = useState<'HOT' | 'ICE'>(initialSelection?.temperature ?? (allowedTemperature === 'HOT' ? 'HOT' : 'ICE'));
-  const [extraShot, setExtraShot] = useState(initialSelection?.extraShot ?? false);
+  const [extraShotCount, setExtraShotCount] = useState(initialSelection?.extraShotCount ?? 0);
+  const [lightly,setLightly] = useState(initialSelection?.lightly?? false);
   const [soyMilk, setSoyMilk] = useState(initialSelection?.soyMilk ?? false);
   const [personalTumbler, setPersonalTumbler] = useState(initialSelection?.personalTumbler ?? false);
   const [quantity, setQuantity] = useState(initialSelection?.quantity ?? 1);
 
   const unitPrice = useMemo(
-    () => menu.price + (extraShot ? 500 : 0) - (personalTumbler ? 200 : 0),
-    [extraShot, menu.price, personalTumbler],
+    () => menu.price + extraShotCount * 500 - (personalTumbler ? 200 : 0),
+    [extraShotCount, menu.price, personalTumbler],
   );
 
   const temperatureEnabled = (value: 'HOT' | 'ICE') => allowedTemperature === 'BOTH' || allowedTemperature === value;
 
   const addToCart = () => {
-    onAddToCart(menu, { temperature, extraShot, soyMilk, personalTumbler, quantity });
+    onAddToCart(menu, { temperature, extraShotCount, lightly,soyMilk, personalTumbler, quantity });
     onClose();
   };
 
@@ -73,7 +74,12 @@ export function MenuDetailScreen({ menu, onAddToCart, onClose, initialSelection,
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>추가 옵션</Text>
-          <OptionRow label="샷 추가" price="+500원" selected={extraShot} onPress={() => setExtraShot((value) => !value)} />
+          <ShotOptionRow
+            count={extraShotCount}
+            onDecrease={() => setExtraShotCount((value) => Math.max(0, value - 1))}
+            onIncrease={() => setExtraShotCount((value) => Math.min(5, value + 1))}
+          />
+          <OptionRow label="연하게" price=' ' selected={lightly} onPress={()=>setLightly((value)=> !value)}/>
           <OptionRow label="두유로 변경" price="무료" selected={soyMilk} onPress={() => setSoyMilk((value) => !value)} />
           <OptionRow label="개인 텀블러" price="-200원" selected={personalTumbler} onPress={() => setPersonalTumbler((value) => !value)} />
         </View>
@@ -121,6 +127,36 @@ function OptionRow({ label, price, selected, onPress }: OptionRowProps) {
   );
 }
 
+function ShotOptionRow({ count, onDecrease, onIncrease }: { count: number; onDecrease: () => void; onIncrease: () => void }) {
+  return (
+    <View style={styles.optionRow}>
+      <View style={styles.shotInfo}>
+        <Text style={styles.optionLabelNoMargin}>샷 추가</Text>
+        <Text style={styles.shotDescription}>기본 2샷으로 제공됩니다.</Text>
+      </View>
+      <View style={styles.shotRightArea}>
+        <Text style={styles.shotPrice}>{count > 0 ? `+${won(count * 500)}` : '+500원'}</Text>
+        <View style={styles.shotControl}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="샷 빼기"
+            disabled={count === 0}
+            onPress={onDecrease}
+            hitSlop={8}
+            style={({ pressed }) => [styles.shotAddButton, count === 0 && styles.shotButtonDisabled, pressed && styles.pressed]}
+          >
+            <Text style={[styles.shotAddText, count === 0 && styles.disabledText]}>−</Text>
+          </Pressable>
+          <Text style={styles.shotCount}>{count}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="샷 추가" disabled={count === 5} onPress={onIncrease} hitSlop={8} style={({ pressed }) => [styles.shotAddButton, count === 5 && styles.shotButtonDisabled, pressed && styles.pressed]}>
+            <Text style={[styles.shotAddText, count === 5 && styles.disabledText]}>+</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.cream },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12 },
@@ -148,10 +184,20 @@ const styles = StyleSheet.create({
   selectedCheck: { borderColor: colors.orange, backgroundColor: colors.orange },
   checkText: { color: colors.white, fontSize: 13, fontWeight: '900' },
   optionLabel: { flex: 1, color: colors.dark, fontSize: 14, fontWeight: '700', marginLeft: 11 },
+  optionLabelNoMargin: { color: colors.dark, fontSize: 14, fontWeight: '800' },
   optionPrice: { color: colors.muted, fontSize: 13, fontWeight: '700' },
+  shotInfo: { flex: 1 },
+  shotDescription: { color: colors.muted, fontSize: 11, marginTop: 3 },
+  shotRightArea: { flexDirection: 'row', alignItems: 'center', marginLeft: 10 },
+  shotPrice: { width: 76, marginRight: 10, color: colors.muted, fontSize: 12, fontWeight: '700', textAlign: 'right' },
+  shotControl: { width: 104, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  shotAddButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.orange, borderRadius: 17, backgroundColor: 'transparent' },
+  shotButtonDisabled: { borderColor: '#D8CEC6' },
+  shotAddText: { color: colors.orange, fontSize: 22, lineHeight: 24, fontWeight: '700' },
+  shotCount: { width: 28, color: colors.dark, fontSize: 15, lineHeight: 20, textAlign: 'center', fontWeight: '900' },
   quantityRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 28 },
   quantityControl: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  quantityButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: colors.white },
+  quantityButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#DDD2C8', borderRadius: 19, backgroundColor: 'transparent' },
   quantityButtonText: { color: colors.dark, fontSize: 22, fontWeight: '800' },
   quantity: { minWidth: 20, color: colors.dark, fontSize: 16, textAlign: 'center', fontWeight: '900' },
   bottomArea: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 18, paddingVertical: 12, backgroundColor: 'rgba(255,249,238,0.97)' },

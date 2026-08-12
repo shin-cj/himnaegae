@@ -11,6 +11,7 @@ import { CartScreen, type PickupChoice } from './src/screens/CartScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { MenuDetailScreen } from './src/screens/MenuDetailScreen';
 import { MenuScreen } from './src/screens/MenuScreen';
+import { NotificationCenterScreen } from './src/screens/NotificationCenterScreen';
 import { MyScreen } from './src/screens/MyScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
 import { TossPaymentScreen, type TossPaymentSession } from './src/screens/TossPaymentScreen';
@@ -62,6 +63,7 @@ function AppContent() {
   const [pickupDelay, setPickupDelay] = useState<PickupChoice>(0);
   const [customPickupTime, setCustomPickupTime] = useState(defaultCustomPickupTime);
   const [paymentSession, setPaymentSession] = useState<TossPaymentSession | null>(null);
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [ordersRefreshToken, setOrdersRefreshToken] = useState(0);
   const [catalogMenus, setCatalogMenus] = useState<Menu[]>(fallbackMenus);
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(defaultStoreSettings);
@@ -72,8 +74,7 @@ function AppContent() {
     const loadMenus = async () => {
       const { data, error } = await supabase
         .from('menus')
-        .select('id, category, emoji, name, description, price, temperature, tag, image_url')
-        .eq('available', true)
+        .select('id, category, emoji, name, description, price, temperature, tag, image_url, available')
         .order('sort_order', { ascending: true })
         .order('id', { ascending: true });
 
@@ -88,6 +89,7 @@ function AppContent() {
         temperature: menu.temperature,
         tag: menu.tag ?? undefined,
         imageUrl: menu.image_url ?? undefined,
+        available: menu.available,
       })) as Menu[]);
     };
 
@@ -132,8 +134,12 @@ function AppContent() {
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0), [cart]);
 
   const addToCart = (menu: Menu, selection: MenuSelection) => {
-    const unitPrice = menu.price + (selection.extraShot ? 500 : 0) - (selection.personalTumbler ? 200 : 0);
-    const key = [menu.id, selection.temperature, selection.extraShot, selection.soyMilk, selection.personalTumbler].join('-');
+    if (menu.available === false) {
+      Alert.alert('품절된 메뉴예요', '다른 메뉴를 선택해주세요.');
+      return;
+    }
+    const unitPrice = menu.price + selection.extraShotCount * 500 - (selection.personalTumbler ? 200 : 0);
+    const key = [menu.id, selection.temperature, selection.extraShotCount, selection.lightly, selection.soyMilk, selection.personalTumbler].join('-');
 
     setCart((current) => {
       const withoutEditingItem = editingItem ? current.filter((item) => item.key !== editingItem.key) : current;
@@ -219,7 +225,9 @@ function AppContent() {
                 menu_id: item.menuId,
                 menu_name: item.menuName,
                 temperature: item.temperature,
-                extra_shot: item.extraShot,
+                extra_shot: item.extraShotCount > 0,
+                extra_shot_count: item.extraShotCount,
+                lightly: item.lightly,
                 soy_milk: item.soyMilk,
                 personal_tumbler: item.personalTumbler,
                 quantity: item.quantity,
@@ -300,6 +308,7 @@ function AppContent() {
                 onSelectMenu={setSelectedMenu}
                 onOpenMenu={() => openTab('menu')}
                 onOpenCart={() => setCartVisible(true)}
+                onOpenNotifications={() => setNotificationsVisible(true)}
               />
             </View>
             <View key="menu" style={styles.page} collapsable={false}>
@@ -347,6 +356,9 @@ function AppContent() {
               customPickupTime={customPickupTime}
               onCustomPickupTimeChange={setCustomPickupTime}
             />
+          </Modal>
+          <Modal visible={notificationsVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setNotificationsVisible(false)}>
+            <NotificationCenterScreen onClose={() => setNotificationsVisible(false)} />
           </Modal>
           <Modal visible={paymentSession !== null} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => closePayment()}>
             {paymentSession ? (

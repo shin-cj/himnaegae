@@ -12,11 +12,13 @@ export type Menu = {
   imageUrl?: string;
   temperature?: MenuTemperature;
   tag?: 'BEST' | 'NEW';
+  available?: boolean;
 };
 
 export type MenuSelection = {
   temperature: Exclude<MenuTemperature, 'BOTH'>;
-  extraShot: boolean;
+  extraShotCount: number;
+  lightly : boolean;
   soyMilk: boolean;
   personalTumbler: boolean;
   quantity: number;

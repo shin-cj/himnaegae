@@ -13,11 +13,13 @@ export type OrderItem = {
   menu_name: string;
   temperature: 'HOT' | 'ICE';
   extra_shot: boolean;
+  extra_shot_count: number;
   soy_milk: boolean;
   personal_tumbler: boolean;
   quantity: number;
   unit_price: number;
   line_total: number;
+  lightly : boolean;
 };
 
 export type Order = {

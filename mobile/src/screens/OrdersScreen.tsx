@@ -12,8 +12,8 @@ const won = (price: number) => `${price.toLocaleString('ko-KR')}원`;
 
 const statusLabel: Record<OrderStatus, string> = {
   payment_pending: '결제 확인 중',
-  paid: '결제 완료',
-  accepted: '주문 접수',
+  paid: '접수 됨',
+  accepted: '접수 됨',
   preparing: '제조 중',
   ready: '픽업 준비 완료',
   picked_up: '픽업 완료',
@@ -21,7 +21,7 @@ const statusLabel: Record<OrderStatus, string> = {
   cancelled: '주문 취소',
 };
 
-const progressSteps = ['주문 접수', '제조 중', '픽업 준비'] as const;
+const progressSteps = ['접수 됨', '제조 중', '픽업 준비 완료', '픽업 완료'] as const;
 type OrderFilter = 'active' | 'completed' | 'cancelled';
 
 const filterLabels: { key: OrderFilter; label: string }[] = [
@@ -36,7 +36,7 @@ const progressIndex: Record<OrderStatus, number> = {
   accepted: 0,
   preparing: 1,
   ready: 2,
-  picked_up: 2,
+  picked_up: 3,
   cancel_requested: 0,
   cancelled: 0,
 };
@@ -56,7 +56,7 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
     setError(null);
     const { data, error: queryError } = await supabase
       .from('orders')
-      .select('id, order_number, status, payment_status, total_amount, pickup_at, pickup_type, created_at, order_items(id, menu_name, temperature, extra_shot, soy_milk, personal_tumbler, quantity, unit_price, line_total)')
+      .select('id, order_number, status, payment_status, total_amount, pickup_at, pickup_type, created_at, order_items(id, menu_name, temperature, extra_shot, extra_shot_count, lightly, soy_milk, personal_tumbler, quantity, unit_price, line_total)')
       .order('created_at', { ascending: false });
 
     if (queryError) setError('주문 내역을 불러오지 못했어요.');
@@ -193,13 +193,12 @@ function OrderCard({ order, cancelling, onCancel }: { order: Order; cancelling: 
       {isCancelled ? (
         <View style={styles.cancelledBox}><Text style={styles.cancelledText}>{statusLabel[order.status]}</Text></View>
       ) : isCompleted ? (
-        <View style={styles.completedBox}><Text style={styles.completedIcon}>✓</Text><Text style={styles.completedText}>픽업이 완료된 주문이에요</Text></View>
+        <View style={styles.completedBox}><Text style={styles.completedText}>픽업이 완료된 주문이에요</Text></View>
       ) : (
         <OrderProgress status={order.status} />
       )}
       {order.status === 'ready' ? (
         <View style={styles.pickupBox}>
-          <Text style={styles.pickupIcon}>☕</Text>
           <View style={styles.pickupCopy}><Text style={styles.pickupTitle}>음료가 준비됐어요!</Text><Text style={styles.pickupText}>카운터에서 주문번호를 말씀해주세요.</Text></View>
         </View>
       ) : null}
@@ -250,7 +249,7 @@ function OrderProgress({ status }: { status: OrderStatus }) {
 }
 
 function OrderItemRow({ item }: { item: OrderItem }) {
-  const options = [item.temperature, item.extra_shot && '샷 추가', item.soy_milk && '두유 변경', item.personal_tumbler && '개인 텀블러'].filter(Boolean).join(' · ');
+  const options = [item.temperature, item.extra_shot_count > 0 && `샷 추가 × ${item.extra_shot_count}`, item.lightly && '연하게', item.soy_milk && '두유 변경', item.personal_tumbler && '개인 텀블러'].filter(Boolean).join(' · ');
   return (
     <View style={styles.itemRow}>
       <View style={styles.itemInfo}><Text style={styles.itemName}>{item.menu_name} × {item.quantity}</Text><Text style={styles.options}>{options}</Text></View>
@@ -306,14 +305,12 @@ const styles = StyleSheet.create({
   progressLabel: { width: 66, color: '#A99A90', fontSize: 11, fontWeight: '700', textAlign: 'center' },
   progressLabelActive: { color: colors.orange, fontWeight: '900' },
   pickupBox: { marginTop: 16, padding: 14, borderRadius: 16, backgroundColor: colors.mint, flexDirection: 'row', alignItems: 'center' },
-  pickupIcon: { marginRight: 11, fontSize: 24 },
   pickupCopy: { flex: 1 },
   pickupTitle: { color: '#32683D', fontSize: 14, fontWeight: '900' },
   pickupText: { marginTop: 3, color: '#54815C', fontSize: 11 },
-  cancelledBox: { marginTop: 16, padding: 13, borderRadius: 14, backgroundColor: '#F5F1ED' },
+  cancelledBox: { marginTop: 16, padding: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#F5F1ED' },
   cancelledText: { color: colors.muted, textAlign: 'center', fontSize: 13, fontWeight: '800' },
   completedBox: { marginTop: 16, padding: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#EAF5E8' },
-  completedIcon: { width: 22, height: 22, marginRight: 7, borderRadius: 11, backgroundColor: '#71A979', color: colors.white, fontSize: 12, fontWeight: '900', textAlign: 'center', lineHeight: 22 },
   completedText: { color: '#4D7653', fontSize: 13, fontWeight: '800' },
   divider: { height: 1, marginVertical: 17, backgroundColor: '#F0E7DE' },
   itemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 13, gap: 12 },
