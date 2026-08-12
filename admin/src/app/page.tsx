@@ -221,9 +221,18 @@ export default function Home() {
     else if (!updatedOrder) setError('고객 요청으로 주문 상태가 먼저 바뀌었어요. 새로고침 후 확인해주세요.');
     else {
       knownOrderStatusRef.current.set(orderId, status);
-      if (status === 'ready') {
-        const { error: notificationError } = await supabase.functions.invoke('send-order-notification', { body: { orderId } });
-        if (notificationError) setError('상태는 변경됐지만 고객 푸시 알림 전송에 실패했어요.');
+      const notificationStatuses: OrderStatus[] = [
+        'paid', 'accepted', 'preparing', 'ready', 'picked_up',
+      ];
+
+      if (notificationStatuses.includes(status)) {
+        const { error: notificationError } = await supabase.functions.invoke('send-order-notification', {
+          body: { orderId },
+        });
+
+        if (notificationError) {
+          setError('주문 상태는 변경됐지만 고객 알림 전송에 실패했어요.');
+        }
       }
     }
     await loadOrders();
@@ -314,7 +323,12 @@ function formatOrderNumber(value: string) { const match = /^A-\d{8}-(\d+)$/.exec
 
 function playAlertSound() {
   try {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const AudioContextClass = window.AudioContext ?? (
+      window as Window & { webkitAudioContext?: typeof AudioContext }
+    ).webkitAudioContext;
+
+    if (!AudioContextClass) return;
+  
     const context = new AudioContextClass();
     const gain = context.createGain();
     gain.gain.setValueAtTime(0.0001, context.currentTime);
@@ -333,8 +347,4 @@ function playAlertSound() {
   } catch {
     // 브라우저가 소리를 막더라도 화면 알림은 계속 표시합니다.
   }
-}
-
-declare global {
-  interface Window { webkitAudioContext: typeof AudioContext }
 }
