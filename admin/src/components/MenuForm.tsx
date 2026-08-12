@@ -119,7 +119,7 @@ export function MenuForm({ mode, initialMenu }: MenuFormProps) {
           <label className="field"><span>메뉴 태그</span><select value={tag} onChange={(event) => setTag(event.target.value as AdminMenu['tag'] | '')}><option value="">태그 없음</option><option value="BEST">BEST</option><option value="NEW">NEW</option></select></label>
           <label className="field"><span>노출 순서</span><input type="number" min="0" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} /></label>
         </div>
-        <label className="availability-check"><input type="checkbox" checked={available} onChange={(event) => setAvailable(event.target.checked)} /><span><b>판매 중으로 표시</b><small>끄면 고객 앱에서 메뉴가 숨겨지고 새 주문을 받을 수 없어요.</small></span></label>
+        <label className="availability-check"><input type="checkbox" checked={available} onChange={(event) => setAvailable(event.target.checked)} /><span><b>판매 중으로 표시</b><small>끄면 고객 앱에 품절로 표시되고 새 주문만 받을 수 없어요. 메뉴와 이미지는 삭제되지 않아요.</small></span></label>
       </section>
 
       {error ? <div className="form-error">{error}</div> : null}

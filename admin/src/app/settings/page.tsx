@@ -20,6 +20,7 @@ type StoreSettings = {
   pickup_max: number;
   pickup_guide: string;
 };
+type StoreSummary = { todayOrders: number; activeOrders: number; todaySales: number; soldOutMenus: number };
 
 const defaults: StoreSettings = {
   id: 1, store_name: '힘내개 본점', business_status: 'open', notice: '', phone: '', address: '',
@@ -34,15 +35,33 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [operationUpdating, setOperationUpdating] = useState(false);
+  const [summary, setSummary] = useState<StoreSummary>({ todayOrders: 0, activeOrders: 0, todaySales: 0, soldOutMenus: 0 });
 
   const loadSettings = useCallback(async () => {
     const { data: sessionData } = await supabase.auth.getSession();
     if (!sessionData.session) { router.replace('/'); return; }
     const { error: accessError } = await supabase.rpc('claim_first_admin');
     if (accessError) { setError('관리자 권한이 없어요.'); setLoading(false); return; }
-    const { data, error: queryError } = await supabase.from('store_settings').select('*').eq('id', 1).single();
-    if (queryError) setError('매장 설정을 불러오지 못했어요.');
-    else { setSettings({ ...data, open_time: data.open_time.slice(0, 5), close_time: data.close_time.slice(0, 5) } as StoreSettings); setError(null); }
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const [settingsResult, ordersResult, menusResult] = await Promise.all([
+      supabase.from('store_settings').select('*').eq('id', 1).single(),
+      supabase.from('orders').select('status,payment_status,total_amount').gte('created_at', new Date(`${today}T00:00:00+09:00`).toISOString()),
+      supabase.from('menus').select('id,available'),
+    ]);
+    if (settingsResult.error) setError('매장 설정을 불러오지 못했어요.');
+    else {
+      const data = settingsResult.data;
+      setSettings({ ...data, open_time: data.open_time.slice(0, 5), close_time: data.close_time.slice(0, 5) } as StoreSettings);
+      const todayOrders = ordersResult.data ?? [];
+      setSummary({
+        todayOrders: todayOrders.length,
+        activeOrders: todayOrders.filter((order) => !['picked_up', 'cancelled'].includes(order.status)).length,
+        todaySales: todayOrders.filter((order) => order.payment_status === 'paid').reduce((sum, order) => sum + order.total_amount, 0),
+        soldOutMenus: (menusResult.data ?? []).filter((menu) => !menu.available).length,
+      });
+      setError(null);
+    }
     setLoading(false);
   }, [router]);
 
@@ -52,6 +71,25 @@ export default function SettingsPage() {
   }, [loadSettings]);
 
   const update = <K extends keyof StoreSettings>(key: K, value: StoreSettings[K]) => setSettings((current) => ({ ...current, [key]: value }));
+
+  const updateBusinessStatus = async (status: BusinessStatus) => {
+    const labels: Record<BusinessStatus, string> = { open: '영업 중', paused: '주문 잠시 중지', closed: '영업 종료' };
+    if (!window.confirm(`매장 상태를 ‘${labels[status]}’으로 바꿀까요? 고객 앱에 바로 반영돼요.`)) return;
+    setOperationUpdating(true); setError(null); setMessage(null);
+    const { error: updateError } = await supabase.from('store_settings').update({ business_status: status }).eq('id', 1);
+    if (updateError) setError('영업 상태를 변경하지 못했어요.');
+    else { update('business_status', status); setMessage(`매장 상태를 ‘${labels[status]}’으로 변경했어요.`); }
+    setOperationUpdating(false);
+  };
+
+  const restoreSoldOutMenus = async () => {
+    if (!summary.soldOutMenus || !window.confirm(`품절 메뉴 ${summary.soldOutMenus}개를 모두 판매 중으로 바꿀까요?`)) return;
+    setOperationUpdating(true); setError(null); setMessage(null);
+    const { error: updateError } = await supabase.from('menus').update({ available: true }).eq('available', false);
+    if (updateError) setError('품절 메뉴를 복구하지 못했어요.');
+    else { setSummary((current) => ({ ...current, soldOutMenus: 0 })); setMessage('모든 품절 메뉴를 판매 중으로 바꿨어요.'); }
+    setOperationUpdating(false);
+  };
 
   const save = async (event: FormEvent) => {
     event.preventDefault(); setSaving(true); setError(null); setMessage(null);
@@ -84,11 +122,16 @@ export default function SettingsPage() {
         <header className="topbar"><div><p className="overline">STORE SETTINGS</p><h1>매장 설정</h1><p>고객 앱에 표시되는 운영 정보를 관리하세요.</p></div></header>
         {loading ? <div className="form-message">매장 설정을 불러오는 중이에요</div> : (
           <form className="settings-form" onSubmit={save}>
+            <section className="operation-summary">
+              <article><small>오늘 주문</small><strong>{summary.todayOrders}건</strong><span>진행 중 {summary.activeOrders}건</span></article>
+              <article><small>오늘 매출</small><strong>{summary.todaySales.toLocaleString('ko-KR')}원</strong><span>결제 취소 제외</span></article>
+              <article><small>품절 메뉴</small><strong>{summary.soldOutMenus}개</strong><button type="button" disabled={!summary.soldOutMenus || operationUpdating} onClick={() => void restoreSoldOutMenus()}>전체 해제</button></article>
+            </section>
             <section className="form-card">
               <div className="form-card-title"><div><h2>영업 상태</h2><p>선택한 상태는 고객 앱에 바로 표시됩니다.</p></div></div>
               <div className="status-options">
                 {([{ key: 'open', title: '영업 중', description: '고객 주문을 정상적으로 받습니다.' }, { key: 'paused', title: '주문 잠시 중지', description: '혼잡할 때 새 주문을 잠시 막습니다.' }, { key: 'closed', title: '영업 종료', description: '오늘 주문 접수를 종료합니다.' }] as const).map((item) => (
-                  <button type="button" key={item.key} className={settings.business_status === item.key ? `selected ${item.key}` : ''} onClick={() => update('business_status', item.key)}><span /><strong>{item.title}</strong><small>{item.description}</small></button>
+                  <button type="button" disabled={operationUpdating} key={item.key} className={settings.business_status === item.key ? `selected ${item.key}` : ''} onClick={() => void updateBusinessStatus(item.key)}><span /><strong>{item.title}</strong><small>{item.description}</small></button>
                 ))}
               </div>
             </section>
@@ -106,6 +149,11 @@ export default function SettingsPage() {
 
             <section className="form-card">
               <div className="form-card-title"><div><h2>픽업 안내</h2><p>고객 홈과 장바구니에 보여줄 예상 시간을 설정하세요.</p></div></div>
+              <div className="pickup-presets" aria-label="픽업 시간 빠른 설정">
+                <span>빠른 설정</span>
+                {[[5, 10], [10, 15], [15, 25], [25, 40]].map(([min, max]) => <button type="button" key={min} className={settings.pickup_min === min && settings.pickup_max === max ? 'selected' : ''} onClick={() => setSettings((current) => ({ ...current, pickup_min: min, pickup_max: max }))}>{min}~{max}분</button>)}
+                <button type="button" className="recommend-pickup" onClick={() => { const min = Math.min(40, 10 + Math.ceil(summary.activeOrders / 3) * 5); setSettings((current) => ({ ...current, pickup_min: min, pickup_max: min + 10 })); }}>현재 주문량 추천</button>
+              </div>
               <div className="form-grid">
                 <label className="field"><span>최소 예상 시간</span><div className="price-input"><input type="number" min="1" max="120" value={settings.pickup_min} onChange={(event) => update('pickup_min', Number(event.target.value))} /><b>분</b></div></label>
                 <label className="field"><span>최대 예상 시간</span><div className="price-input"><input type="number" min="1" max="180" value={settings.pickup_max} onChange={(event) => update('pickup_max', Number(event.target.value))} /><b>분</b></div></label>

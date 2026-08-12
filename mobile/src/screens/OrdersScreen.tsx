@@ -56,7 +56,7 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
     setError(null);
     const { data, error: queryError } = await supabase
       .from('orders')
-      .select('id, order_number, status, payment_status, total_amount, pickup_at, pickup_type, created_at, order_items(id, menu_name, temperature, extra_shot, extra_shot_count, lightly, soy_milk, personal_tumbler, quantity, unit_price, line_total)')
+      .select('id, order_number, status, payment_status, total_amount, pickup_at, pickup_type, cancellation_reason, created_at, order_items(id, menu_name, temperature, extra_shot, extra_shot_count, lightly, soy_milk, personal_tumbler, quantity, unit_price, line_total)')
       .order('created_at', { ascending: false });
 
     if (queryError) setError('주문 내역을 불러오지 못했어요.');
@@ -72,27 +72,24 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
   const requestCancellation = useCallback((order: Order) => {
     Alert.alert(
       '주문을 취소할까요?',
-      '매장에서 제조를 시작하기 전까지 취소를 요청할 수 있어요.',
+      '제조 시작 전이라면 즉시 주문과 결제가 취소돼요. 제조가 시작된 뒤에는 취소할 수 없어요.',
       [
         { text: '아니요', style: 'cancel' },
         {
-          text: '취소 요청',
+          text: '주문 취소',
           style: 'destructive',
           onPress: () => {
             void (async () => {
               setCancellingId(order.id);
               setError(null);
-              const { data: cancelStatus, error: cancelError } = await supabase.rpc('request_order_cancel', { p_order_id: order.id });
+              const { error: cancelError } = await supabase.functions.invoke('cancel-payment', {
+                body: { orderId: order.id, cancelReason: '고객 앱에서 직접 주문 취소' },
+              });
               if (cancelError) {
-                setError(cancelError.message.includes('CANCELLATION_NOT_ALLOWED')
-                  ? '이미 제조가 시작되어 앱에서 취소할 수 없어요. 매장에 문의해주세요.'
-                  : '취소 요청을 보내지 못했어요. 다시 시도해주세요.');
+                setError('주문을 취소하지 못했어요. 이미 제조가 시작됐거나 결제 취소 처리 중일 수 있어요. 새로고침 후 확인해주세요.');
               } else {
                 await loadOrders();
-                Alert.alert(
-                  cancelStatus === 'cancelled' ? '주문 취소 완료' : '취소 요청 완료',
-                  cancelStatus === 'cancelled' ? '결제 확인 중이던 주문을 취소했어요.' : '매장에서 확인한 뒤 주문 상태에 반영돼요.',
-                );
+                Alert.alert('주문 취소 완료', order.payment_status === 'paid' ? '결제 취소와 환불이 완료됐어요.' : '주문이 취소됐어요.');
               }
               setCancellingId(null);
             })();
@@ -173,9 +170,9 @@ function OrderCard({ order, cancelling, onCancel }: { order: Order; cancelling: 
   const canCancel = order.status === 'payment_pending' || order.status === 'paid' || order.status === 'accepted';
   const showCancelArea = !isCancelled && order.status !== 'picked_up';
   const cancelHint = order.status === 'payment_pending'
-    ? '완료되지 않은 결제 주문을 취소할 수 있어요'
+    ? '결제 확인 전 주문은 즉시 취소할 수 있어요'
     : canCancel
-      ? '제조 시작 전까지만 취소할 수 있어요'
+      ? '제조 시작 전에는 즉시 결제 취소돼요'
       : '제조가 시작되어 취소할 수 없어요';
   return (
     <View style={styles.orderCard}>
@@ -191,7 +188,10 @@ function OrderCard({ order, cancelling, onCancel }: { order: Order; cancelling: 
         </View>
       ) : null}
       {isCancelled ? (
-        <View style={styles.cancelledBox}><Text style={styles.cancelledText}>{statusLabel[order.status]}</Text></View>
+        <View style={styles.cancelledBox}>
+          <Text style={styles.cancelledText}>{statusLabel[order.status]}</Text>
+          {order.cancellation_reason ? <Text style={styles.cancelReason}>사유 · {order.cancellation_reason}</Text> : null}
+        </View>
       ) : isCompleted ? (
         <View style={styles.completedBox}><Text style={styles.completedText}>픽업이 완료된 주문이에요</Text></View>
       ) : (
@@ -308,8 +308,9 @@ const styles = StyleSheet.create({
   pickupCopy: { flex: 1 },
   pickupTitle: { color: '#32683D', fontSize: 14, fontWeight: '900' },
   pickupText: { marginTop: 3, color: '#54815C', fontSize: 11 },
-  cancelledBox: { marginTop: 16, padding: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#F5F1ED' },
+  cancelledBox: { marginTop: 16, padding: 13, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#F5F1ED' },
   cancelledText: { color: colors.muted, textAlign: 'center', fontSize: 13, fontWeight: '800' },
+  cancelReason: { marginTop: 6, color: colors.muted, textAlign: 'center', fontSize: 11, lineHeight: 17 },
   completedBox: { marginTop: 16, padding: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#EAF5E8' },
   completedText: { color: '#4D7653', fontSize: 13, fontWeight: '800' },
   divider: { height: 1, marginVertical: 17, backgroundColor: '#F0E7DE' },

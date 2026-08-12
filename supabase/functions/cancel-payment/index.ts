@@ -12,8 +12,12 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { ...cors, 'Content-Type': 'application/json' },
   });
+const formatOrderNumber = (value: string) => {
+  const match = /^A-\d{8}-(\d+)$/.exec(value);
+  return match ? `A-${match[1]}` : value;
+};
 
-const cancellableStatuses = ['payment_pending', 'paid', 'accepted', 'cancel_requested'];
+const customerCancellableStatuses = ['payment_pending', 'paid', 'accepted'];
 
 export default {
   fetch: async (request: Request) => {
@@ -22,8 +26,8 @@ export default {
 
     try {
       const { data: context, error: contextError } = await createSupabaseContext(request, { auth: 'user' });
-      const adminUserId = context?.userClaims?.sub;
-      if (contextError || !adminUserId) return json({ error: '관리자 로그인이 필요해요.' }, 401);
+      const requesterId = context?.userClaims?.sub;
+      if (contextError || !requesterId) return json({ error: '로그인이 필요해요.' }, 401);
 
       const supabaseUrl = Deno.env.get('SUPABASE_URL');
       const secretKeysRaw = Deno.env.get('SUPABASE_SECRET_KEYS');
@@ -37,34 +41,42 @@ export default {
       }
 
       const admin = createClient(supabaseUrl, serviceRoleKey);
-      const { data: adminRole } = await admin
-        .from('admin_users')
-        .select('user_id')
-        .eq('user_id', adminUserId)
-        .maybeSingle();
-
-      if (!adminRole) return json({ error: '관리자만 결제를 취소할 수 있어요.' }, 403);
-
       const body = await request.json();
       const orderId = String(body.orderId ?? '');
       const cancelReason = String(body.cancelReason ?? '고객 요청으로 주문 취소').trim().slice(0, 200);
       if (!orderId) return json({ error: '주문 번호가 필요해요.' }, 400);
 
-      const { data: order, error: orderError } = await admin
-        .from('orders')
-        .select('id,status,payment_status,payment_key')
-        .eq('id', orderId)
-        .maybeSingle();
+      const [{ data: adminRole }, { data: order, error: orderError }] = await Promise.all([
+        admin.from('admin_users').select('user_id').eq('user_id', requesterId).maybeSingle(),
+        admin.from('orders').select('id,user_id,order_number,status,payment_status,payment_key,cancellation_reason').eq('id', orderId).maybeSingle(),
+      ]);
 
       if (orderError) throw orderError;
       if (!order) return json({ error: '주문을 찾을 수 없어요.' }, 404);
+      const isAdmin = Boolean(adminRole);
+      const isOwner = order.user_id === requesterId;
+      if (!isAdmin && !isOwner) return json({ error: '이 주문을 취소할 권한이 없어요.' }, 403);
 
       if (order.status === 'cancelled' || ['cancelled', 'refunded'].includes(order.payment_status)) {
         return json({ ok: true, alreadyCancelled: true });
       }
 
-      if (!cancellableStatuses.includes(order.status)) {
+      if (![...customerCancellableStatuses, 'cancel_requested'].includes(order.status)) {
         return json({ error: '이미 제조가 시작되어 결제를 취소할 수 없어요.' }, 409);
+      }
+
+      // 제조 시작과 고객 취소가 동시에 눌려도 한쪽만 성공하도록 먼저 상태를 선점합니다.
+      const previousStatus = order.status;
+      if (order.status !== 'cancel_requested') {
+        const { data: claimedOrder, error: claimError } = await admin
+          .from('orders')
+          .update({ status: 'cancel_requested', cancellation_reason: cancelReason })
+          .eq('id', order.id)
+          .in('status', customerCancellableStatuses)
+          .select('id')
+          .maybeSingle();
+        if (claimError) throw claimError;
+        if (!claimedOrder) return json({ error: '이미 제조가 시작되어 결제를 취소할 수 없어요.' }, 409);
       }
 
       let nextPaymentStatus = 'cancelled';
@@ -90,6 +102,9 @@ export default {
 
         const tossResult = await tossResponse.json();
         if (!tossResponse.ok) {
+          if (previousStatus !== 'cancel_requested') {
+            await admin.from('orders').update({ status: previousStatus, cancellation_reason: order.cancellation_reason }).eq('id', order.id).eq('status', 'cancel_requested');
+          }
           return json({ error: tossResult.message ?? '토스 결제 취소에 실패했어요.' }, 400);
         }
         nextPaymentStatus = 'refunded';
@@ -100,15 +115,44 @@ export default {
         .update({
           status: 'cancelled',
           payment_status: nextPaymentStatus,
+          cancellation_reason: cancelReason,
           cancelled_at: new Date().toISOString(),
         })
         .eq('id', order.id)
-        .in('status', cancellableStatuses)
+        .eq('status', 'cancel_requested')
         .select('id,status,payment_status')
         .maybeSingle();
 
       if (updateError) throw updateError;
       if (!cancelledOrder) return json({ error: '주문 상태가 먼저 변경됐어요. 새로고침 후 확인해주세요.' }, 409);
+
+      await admin.from('order_notifications').upsert({
+        user_id: order.user_id,
+        order_id: order.id,
+        status: 'cancelled',
+        title: '주문 취소 완료',
+        body: order.payment_status === 'paid' ? '결제 취소와 환불이 완료됐어요.' : '주문이 취소됐어요.',
+      }, { onConflict: 'order_id,status', ignoreDuplicates: true });
+
+      try {
+        const { data: tokens } = await admin.from('push_tokens').select('expo_push_token').eq('user_id', order.user_id);
+        if (tokens?.length) {
+          await fetch('https://exp.host/--/api/v2/push/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify(tokens.map(({ expo_push_token }) => ({
+              to: expo_push_token,
+              sound: 'default',
+              channelId: 'orders',
+              title: '주문 취소 완료',
+              body: `${formatOrderNumber(order.order_number)} · ${order.payment_status === 'paid' ? '결제 취소와 환불이 완료됐어요.' : '주문이 취소됐어요.'}`,
+              data: { screen: 'notifications', orderId: order.id, status: 'cancelled' },
+            }))),
+          });
+        }
+      } catch {
+        // 알림 전송 실패가 결제 취소 결과에 영향을 주지는 않아요.
+      }
 
       return json({ ok: true, order: cancelledOrder });
     } catch (error) {

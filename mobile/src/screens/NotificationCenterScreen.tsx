@@ -17,63 +17,72 @@ type NoticeOrderItem = {
   personal_tumbler: boolean;
   quantity: number;
   line_total: number;
-}
+};
 
-type NoticeOrder = {
-  id: string;
-  order_number: string;
+type Notice = {
+  id: number;
+  order_id: string;
   status: string;
-  total_amount: number;
-  pickup_at: string | null;
+  title: string;
+  body: string;
+  read_at: string | null;
   created_at: string;
-  order_items: NoticeOrderItem[];
+  orders: {
+    order_number: string;
+    total_amount: number;
+    pickup_at: string | null;
+    cancellation_reason: string | null;
+    order_items: NoticeOrderItem[];
+  };
 };
 
-const acceptedIcon = require('../../assets/order-status/accepted.png');
-const preparingIcon = require('../../assets/order-status/preparing.png');
-const readyIcon = require('../../assets/order-status/ready.png');
-const completedIcon = require('../../assets/order-status/completed.png');
-const cancelledIcon = require('../../assets/order-status/cancelled.png');
-
-const statusCopy: Record<string, { icon: ImageSourcePropType; title: string; body: string }> = {
-  payment_pending: { icon: acceptedIcon, title: '결제 확인 중', body: '결제가 완료되기를 기다리고 있어요.' },
-  paid: { icon: acceptedIcon, title: '접수 됨', body: '매장에서 주문을 확인했어요.' },
-  accepted: { icon: acceptedIcon, title: '접수 됨', body: '곧 음료 제조를 시작할게요.' },
-  preparing: { icon: preparingIcon, title: '제조 중', body: '음료를 만들고 있어요. 조금만 기다려주세요.' },
-  ready: { icon: readyIcon, title: '픽업 준비 완료', body: '매장에서 주문번호를 확인하고 픽업해주세요.' },
-  picked_up: { icon: completedIcon, title: '픽업 완료', body: '힘내개를 이용해주셔서 감사해요.' },
-  cancel_requested: { icon: cancelledIcon, title: '취소 요청 확인 중', body: '매장에서 취소 요청을 확인하고 있어요.' },
-  cancelled: { icon: cancelledIcon, title: '주문 취소 완료', body: '주문과 결제 취소가 완료됐어요.' },
+const statusIcons: Record<string, ImageSourcePropType> = {
+  payment_pending: require('../../assets/order-status/accepted.png'),
+  paid: require('../../assets/order-status/accepted.png'),
+  accepted: require('../../assets/order-status/accepted.png'),
+  preparing: require('../../assets/order-status/preparing.png'),
+  ready: require('../../assets/order-status/ready.png'),
+  picked_up: require('../../assets/order-status/completed.png'),
+  cancel_requested: require('../../assets/order-status/cancelled.png'),
+  cancelled: require('../../assets/order-status/cancelled.png'),
 };
 
-export function NotificationCenterScreen({ onClose }: { onClose: () => void }) {
+type Props = {
+  onClose: () => void;
+  onUnreadChange: (count: number) => void;
+};
+
+export function NotificationCenterScreen({ onClose, onUnreadChange }: Props) {
   const { user } = useAuth();
-  const [orders, setOrders] = useState<NoticeOrder[]>([]);
+  const [notices, setNotices] = useState<Notice[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [expendedOrderId, setExpendedOrderId] = useState<string | null>(null);
+  const [expandedNoticeId, setExpandedNoticeId] = useState<number | null>(null);
 
   const loadNotices = useCallback(async () => {
     if (!user) {
-      setOrders([]);
+      setNotices([]);
       setLoading(false);
+      onUnreadChange(0);
       return;
     }
     const { data } = await supabase
-      .from('orders')
-      .select(`id,order_number,status,total_amount,pickup_at,created_at,order_items(id,menu_name,temperature,extra_shot_count,lightly,soy_milk,personal_tumbler,quantity,line_total)`)
+      .from('order_notifications')
+      .select(`id,order_id,status,title,body,read_at,created_at,orders!inner(order_number,total_amount,pickup_at,cancellation_reason,order_items(id,menu_name,temperature,extra_shot_count,lightly,soy_milk,personal_tumbler,quantity,line_total))`)
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
-      .limit(20);
-    setOrders((data ?? [])  as NoticeOrder[],);
+      .limit(50);
+    const nextNotices = (data ?? []) as unknown as Notice[];
+    setNotices(nextNotices);
+    onUnreadChange(nextNotices.filter((notice) => !notice.read_at).length);
     setLoading(false);
-  }, [user]);
+  }, [onUnreadChange, user]);
 
   useEffect(() => {
     void loadNotices();
     if (!user) return;
     const channel = supabase.channel(`notification-center-${user.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `user_id=eq.${user.id}` }, () => void loadNotices())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_notifications', filter: `user_id=eq.${user.id}` }, () => void loadNotices())
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
   }, [loadNotices, user]);
@@ -84,69 +93,74 @@ export function NotificationCenterScreen({ onClose }: { onClose: () => void }) {
     setRefreshing(false);
   };
 
+  const openNotice = async (notice: Notice) => {
+    setExpandedNoticeId((current) => current === notice.id ? null : notice.id);
+    if (notice.read_at) return;
+    const readAt = new Date().toISOString();
+    setNotices((current) => current.map((item) => item.id === notice.id ? { ...item, read_at: readAt } : item));
+    onUnreadChange(Math.max(0, notices.filter((item) => !item.read_at).length - 1));
+    await supabase.from('order_notifications').update({ read_at: readAt }).eq('id', notice.id);
+  };
+
+  const markAllRead = async () => {
+    if (!user) return;
+    const readAt = new Date().toISOString();
+    setNotices((current) => current.map((notice) => ({ ...notice, read_at: notice.read_at ?? readAt })));
+    onUnreadChange(0);
+    await supabase.from('order_notifications').update({ read_at: readAt }).eq('user_id', user.id).is('read_at', null);
+  };
+
+  const unreadCount = notices.filter((notice) => !notice.read_at).length;
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.header}>
         <Pressable onPress={onClose} hitSlop={12}><Text style={styles.close}>×</Text></Pressable>
-        <Text style={styles.title}>알림</Text>
-        <View style={styles.headerSpace} />
+        <View style={styles.headerTitleRow}><Text style={styles.title}>알림</Text>{unreadCount > 0 ? <Text style={styles.unreadCount}>{unreadCount}</Text> : null}</View>
+        <Pressable disabled={unreadCount === 0} onPress={() => void markAllRead()} hitSlop={8}><Text style={[styles.markAll, unreadCount === 0 && styles.markAllDisabled]}>전체 읽음</Text></Pressable>
       </View>
+
       {loading ? <View style={styles.center}><ActivityIndicator color={colors.orange} /></View> : (
         <ScrollView
-          contentContainerStyle={[styles.content, orders.length === 0 && styles.emptyContent]}
+          contentContainerStyle={[styles.content, notices.length === 0 && styles.emptyContent]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={colors.orange} />}
         >
-          {orders.length === 0 ? (
+          {notices.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>🔔</Text>
               <Text style={styles.emptyTitle}>{user ? '아직 알림이 없어요' : '로그인이 필요해요'}</Text>
-              <Text style={styles.emptyText}>{user ? '주문 상태가 여기에 차곡차곡 표시돼요.' : '로그인하면 주문 알림을 다시 확인할 수 있어요.'}</Text>
+              <Text style={styles.emptyText}>{user ? '주문 상태가 바뀌면 여기에 기록돼요.' : '로그인하면 주문 알림을 다시 확인할 수 있어요.'}</Text>
             </View>
-          ) : orders.map((order) => {
-            const copy = statusCopy[order.status] ?? statusCopy.paid;
+          ) : notices.map((notice) => {
+            const order = notice.orders;
+            const expanded = expandedNoticeId === notice.id;
             return (
-              <Pressable key={order.id} onPress={() => setExpendedOrderId((current) => current === order.id ? null : order.id)}
-                style={({ pressed }) => [styles.noticeCard, pressed && styles.noticeCardPressed]}>
-                <View style={styles.iconCircle}><Image source={copy.icon} style={styles.noticeIcon} resizeMode="contain" /></View>
+              <Pressable key={notice.id} onPress={() => void openNotice(notice)} style={({ pressed }) => [styles.noticeCard, !notice.read_at && styles.unreadCard, pressed && styles.noticeCardPressed]}>
+                <View style={styles.iconArea}>
+                  <Image source={statusIcons[notice.status] ?? statusIcons.paid} style={styles.noticeIcon} resizeMode="contain" />
+                  {!notice.read_at ? <View style={styles.unreadDot} /> : null}
+                </View>
                 <View style={styles.noticeCopy}>
                   <View style={styles.noticeTitleRow}>
-                    <Text style={styles.noticeTitle}>{copy.title}</Text>
+                    <Text style={[styles.noticeTitle, !notice.read_at && styles.unreadTitle]}>{notice.title}</Text>
                     <Text style={styles.orderNumber}>{formatOrderNumber(order.order_number)}</Text>
                   </View>
-                  <Text style={styles.noticeBody}>{copy.body}</Text>
-                  <Text style={styles.noticeTime}>{formatDate(order.created_at)}{order.pickup_at ? ` · 픽업 ${formatTime(order.pickup_at)}` : ''}</Text>
-                  {expendedOrderId === order.id ? (
+                  <Text style={styles.noticeBody}>{notice.body}</Text>
+                  <Text style={styles.noticeTime}>{formatDateTime(notice.created_at)}{order.pickup_at ? ` · 픽업 ${formatTime(order.pickup_at)}` : ''}</Text>
+
+                  {expanded ? (
                     <View style={styles.orderDetail}>
                       <View style={styles.detailDivider} />
-
                       {order.order_items.map((item) => (
                         <View key={item.id} style={styles.detailItem}>
-                          <View style={styles.detailItemCopy}>
-                            <Text style={styles.detailItemName}>
-                              {item.menu_name} × {item.quantity}
-                            </Text>
-
-                            <Text style={styles.detailOptions}>
-                              {formatOptions(item)}
-                            </Text>
-                          </View>
-
-                          <Text style={styles.detailPrice}>
-                            {won(item.line_total)}
-                          </Text>
+                          <View style={styles.detailItemCopy}><Text style={styles.detailItemName}>{item.menu_name} × {item.quantity}</Text><Text style={styles.detailOptions}>{formatOptions(item)}</Text></View>
+                          <Text style={styles.detailPrice}>{won(item.line_total)}</Text>
                         </View>
                       ))}
-
-                      <View style={styles.detailTotal}>
-                        <Text style={styles.detailTotalLabel}>총 결제금액</Text>
-                        <Text style={styles.detailTotalPrice}>
-                          {won(order.total_amount)}
-                        </Text>
-                      </View>
+                      {notice.status.includes('cancel') && order.cancellation_reason ? <View style={styles.cancelReason}><Text style={styles.cancelReasonLabel}>취소 사유</Text><Text style={styles.cancelReasonText}>{order.cancellation_reason}</Text></View> : null}
+                      <View style={styles.detailTotal}><Text style={styles.detailTotalLabel}>총 결제금액</Text><Text style={styles.detailTotalPrice}>{won(order.total_amount)}</Text></View>
                     </View>
-                  ) : (
-                    <Text style={styles.detailGuide}>눌러서 주문 상세보기</Text>
-                  )}
+                  ) : <Text style={styles.detailGuide}>눌러서 주문 상세보기</Text>}
                 </View>
               </Pressable>
             );
@@ -157,122 +171,54 @@ export function NotificationCenterScreen({ onClose }: { onClose: () => void }) {
   );
 }
 
-function won(price : number) {
-  return `${price.toLocaleString('ko-KR')}원`
+function won(price: number) { return `${price.toLocaleString('ko-KR')}원`; }
+function formatOptions(item: NoticeOrderItem) {
+  return [item.temperature, item.extra_shot_count > 0 && `샷 추가 × ${item.extra_shot_count}`, item.lightly && '연하게', item.soy_milk && '두유 변경', item.personal_tumbler && '개인 텀블러'].filter(Boolean).join(' · ');
 }
-
-function formatOptions(item : NoticeOrderItem){
-  const option = [
-    item.temperature,
-    item.extra_shot_count > 0 ? `샷 추가 x ${item.extra_shot_count}` : null,
-    item.lightly ? '연하게' : null,
-    item.soy_milk ? '두유 변경' : null,
-    item.personal_tumbler ? '개인 텀블러' : null,
-  ].filter(Boolean);
-
-  return option.join(' · ')
-}
-
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' });
-}
-
-function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
-}
+function formatDateTime(value: string) { return new Date(value).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+function formatTime(value: string) { return new Date(value).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }); }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.cream },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12 },
-  close: { width: 36, color: colors.dark, fontSize: 30, lineHeight: 34 },
+  header: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10 },
+  close: { width: 62, color: colors.dark, fontSize: 30, lineHeight: 34 },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   title: { color: colors.dark, fontSize: 19, fontWeight: '900' },
-  headerSpace: { width: 36 },
+  unreadCount: { minWidth: 19, height: 19, paddingHorizontal: 5, borderRadius: 10, overflow: 'hidden', backgroundColor: colors.orange, color: colors.white, fontSize: 10, lineHeight: 19, textAlign: 'center', fontWeight: '900' },
+  markAll: { width: 62, color: colors.orange, fontSize: 11, textAlign: 'right', fontWeight: '900' },
+  markAllDisabled: { color: '#B8AEA7' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  content: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30 },
+  content: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 30 },
   emptyContent: { flexGrow: 1, justifyContent: 'center' },
   empty: { alignItems: 'center', paddingBottom: 70 },
   emptyIcon: { fontSize: 42 },
   emptyTitle: { marginTop: 14, color: colors.dark, fontSize: 18, fontWeight: '900' },
   emptyText: { marginTop: 7, color: colors.muted, fontSize: 13 },
   noticeCard: { flexDirection: 'row', paddingHorizontal: 4, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: '#E9DED5' },
-  iconCircle: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
+  unreadCard: { backgroundColor: 'rgba(242,107,58,0.035)' },
+  noticeCardPressed: { opacity: 0.6 },
+  iconArea: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
   noticeIcon: { width: 27, height: 27 },
+  unreadDot: { position: 'absolute', top: 2, right: 1, width: 7, height: 7, borderRadius: 4, backgroundColor: colors.orange },
   noticeCopy: { flex: 1, marginLeft: 12 },
   noticeTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  noticeTitle: { flex: 1, color: colors.dark, fontSize: 18, fontWeight: '900' },
-  orderNumber: { color: colors.orange, fontSize: 15, fontWeight: '900' },
-  noticeBody: { marginTop: 5, color: colors.muted, fontSize: 14, lineHeight: 18 },
-  noticeTime: { marginTop: 8, color: '#A3978F', fontSize: 11, fontWeight: '700' },
-  noticeCardPressed: {
-  opacity: 0.6,
-},
-
-detailGuide: {
-  marginTop: 9,
-  color: colors.orange,
-  fontSize: 10,
-  fontWeight: '800',
-},
-
-orderDetail: {
-  marginTop: 12,
-},
-
-detailDivider: {
-  height: 1,
-  marginBottom: 12,
-  backgroundColor: '#E9DED5',
-},
-
-detailItem: {
-  flexDirection: 'row',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  marginBottom: 12,
-  gap: 12,
-},
-
-detailItemCopy: {
-  flex: 1,
-},
-
-detailItemName: {
-  color: colors.dark,
-  fontSize: 12,
-  fontWeight: '900',
-},
-
-detailOptions: {
-  marginTop: 4,
-  color: colors.muted,
-  fontSize: 12,
-  lineHeight: 15,
-},
-
-detailPrice: {
-  color: colors.dark,
-  fontSize: 12,
-  fontWeight: '800',
-},
-
-detailTotal: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  paddingTop: 12,
-  borderTopWidth: 1,
-  borderTopColor: '#E9DED5',
-},
-
-detailTotalLabel: {
-  color: colors.dark,
-  fontSize: 12,
-  fontWeight: '800',
-},
-
-detailTotalPrice: {
-  color: colors.orange,
-  fontSize: 14,
-  fontWeight: '900',
-},
+  noticeTitle: { flex: 1, color: colors.dark, fontSize: 16, fontWeight: '800' },
+  unreadTitle: { fontWeight: '900' },
+  orderNumber: { color: colors.orange, fontSize: 13, fontWeight: '900' },
+  noticeBody: { marginTop: 5, color: colors.muted, fontSize: 13, lineHeight: 19 },
+  noticeTime: { marginTop: 8, color: '#A3978F', fontSize: 10, fontWeight: '700' },
+  detailGuide: { marginTop: 9, color: colors.orange, fontSize: 10, fontWeight: '800' },
+  orderDetail: { marginTop: 12 },
+  detailDivider: { height: 1, marginBottom: 12, backgroundColor: '#E9DED5' },
+  detailItem: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 },
+  detailItemCopy: { flex: 1 },
+  detailItemName: { color: colors.dark, fontSize: 12, fontWeight: '900' },
+  detailOptions: { marginTop: 4, color: colors.muted, fontSize: 11, lineHeight: 16 },
+  detailPrice: { color: colors.dark, fontSize: 12, fontWeight: '800' },
+  cancelReason: { marginBottom: 12, padding: 11, borderRadius: 12, backgroundColor: '#F5ECE7' },
+  cancelReasonLabel: { color: '#966756', fontSize: 10, fontWeight: '900' },
+  cancelReasonText: { marginTop: 4, color: colors.dark, fontSize: 12, lineHeight: 17 },
+  detailTotal: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E9DED5' },
+  detailTotalLabel: { color: colors.dark, fontSize: 12, fontWeight: '800' },
+  detailTotalPrice: { color: colors.orange, fontSize: 14, fontWeight: '900' },
 });

@@ -17,6 +17,7 @@ type HomeScreenProps = {
   onOpenMenu: () => void;
   onOpenCart: () => void;
   onOpenNotifications: () => void;
+  unreadNotifications: number;
 };
 
 const banners = [
@@ -46,7 +47,7 @@ const banners = [
   },
 ];
 
-export function HomeScreen({ menus, storeSettings, cartCount, cartTotal, onSelectMenu, onOpenMenu, onOpenCart, onOpenNotifications }: HomeScreenProps) {
+export function HomeScreen({ menus, storeSettings, cartCount, cartTotal, onSelectMenu, onOpenMenu, onOpenCart, onOpenNotifications, unreadNotifications }: HomeScreenProps) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [bannerIndex, setBannerIndex] = useState(0);
@@ -64,6 +65,7 @@ export function HomeScreen({ menus, storeSettings, cartCount, cartTotal, onSelec
           <View style={styles.headerActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="알림함 열기" onPress={onOpenNotifications} hitSlop={8} style={({ pressed }) => [styles.bellButton, pressed && styles.pressed]}>
               <Text style={styles.bellIcon}>🔔</Text>
+              {unreadNotifications > 0 ? <View style={styles.notificationBadge}><Text style={styles.notificationBadgeText}>{unreadNotifications > 99 ? '99+' : unreadNotifications}</Text></View> : null}
             </Pressable>
             <View style={[styles.openBadge, storeSettings.businessStatus !== 'open' && styles.closedBadge]}>
               <View style={[styles.openDot, storeSettings.businessStatus !== 'open' && styles.closedDot]} />
@@ -140,6 +142,8 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   bellButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19 },
   bellIcon: { fontSize: 17 },
+  notificationBadge: { position: 'absolute', right: -4, top: -3, minWidth: 18, height: 18, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: '#E54B4B' },
+  notificationBadgeText: { color: colors.white, fontSize: 9, fontWeight: '900' },
   openBadge: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: colors.mint, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20 },
   openDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#3F9B55' },
   openText: { color: '#317440', fontSize: 12, fontWeight: '800' },

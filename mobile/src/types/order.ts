@@ -30,6 +30,7 @@ export type Order = {
   total_amount: number;
   pickup_at: string | null;
   pickup_type: 'asap' | 'scheduled' | null;
+  cancellation_reason: string | null;
   created_at: string;
   order_items: OrderItem[];
 };

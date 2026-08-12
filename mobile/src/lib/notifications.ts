@@ -83,24 +83,37 @@ export async function registerForOrderNotifications(userId: string): Promise<Not
   }
 }
 
-export async function showReadyNotification(orderNumber: string) {
+const statusNotifications: Record<string, { title: string; body: string }> = {
+  paid: { title: '주문이 접수됐어요 ☕', body: '매장에서 주문을 확인하고 있어요.' },
+  accepted: { title: '주문이 접수됐어요 ☕', body: '곧 음료 제조를 시작할게요.' },
+  preparing: { title: '음료를 만들고 있어요 🥤', body: '조금만 기다려주세요.' },
+  ready: { title: '픽업 준비 완료 🔔', body: '매장에서 음료를 픽업해주세요.' },
+  picked_up: { title: '픽업 완료 ✅', body: '힘내개를 이용해주셔서 감사해요.' },
+  cancel_requested: { title: '취소 요청 확인 중', body: '매장에서 취소 요청을 확인하고 있어요.' },
+  cancelled: { title: '주문 취소 완료', body: '주문과 결제 취소가 완료됐어요.' },
+};
+
+export async function showOrderStatusNotification(orderNumber: string, status: string) {
   if (Platform.OS === 'web') return;
   if (!await getNotificationPermission()) return;
+  const copy = statusNotifications[status];
+  if (!copy) return;
 
   await Notifications.scheduleNotificationAsync({
     content: {
-      title: '음료가 준비됐어요! ☕',
-      body: `${formatOrderNumber(orderNumber)} 주문을 카운터에서 픽업해주세요.`,
+      title: copy.title,
+      body: `${formatOrderNumber(orderNumber)} · ${copy.body}`,
       sound: 'default',
-      data: { screen: 'orders', orderNumber },
+      data: { screen: 'notifications', orderNumber, status },
     },
     trigger: null,
   });
 }
 
-export function addNotificationTapListener(onOpenOrders: () => void) {
+export function addNotificationTapListener(onOpenNotifications: () => void) {
   return Notifications.addNotificationResponseReceivedListener((response) => {
-    if (response.notification.request.content.data?.screen === 'orders') onOpenOrders();
+    const screen = response.notification.request.content.data?.screen;
+    if (screen === 'orders' || screen === 'notifications') onOpenNotifications();
   });
 }
 

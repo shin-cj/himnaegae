@@ -16,7 +16,7 @@ import { MyScreen } from './src/screens/MyScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
 import { TossPaymentScreen, type TossPaymentSession } from './src/screens/TossPaymentScreen';
 import { supabase } from './src/lib/supabase';
-import { addNotificationTapListener, showReadyNotification, usesExpoGo } from './src/lib/notifications';
+import { addNotificationTapListener, showOrderStatusNotification, usesExpoGo } from './src/lib/notifications';
 import { formatOrderNumber } from './src/lib/order-number';
 import type { CartItem, Menu, MenuSelection } from './src/types/menu';
 import type { StoreSettings } from './src/types/store';
@@ -64,6 +64,7 @@ function AppContent() {
   const [customPickupTime, setCustomPickupTime] = useState(defaultCustomPickupTime);
   const [paymentSession, setPaymentSession] = useState<TossPaymentSession | null>(null);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [ordersRefreshToken, setOrdersRefreshToken] = useState(0);
   const [catalogMenus, setCatalogMenus] = useState<Menu[]>(fallbackMenus);
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(defaultStoreSettings);
@@ -176,7 +177,7 @@ function AppContent() {
   };
 
   useEffect(() => {
-    const subscription = addNotificationTapListener(() => openTab('orders'));
+    const subscription = addNotificationTapListener(() => setNotificationsVisible(true));
     return () => subscription.remove();
   }, []);
 
@@ -189,12 +190,29 @@ function AppContent() {
       }, (payload) => {
         const changedOrder = payload.new as { order_number?: string; status?: string };
         setOrdersRefreshToken((current) => current + 1);
-        if (changedOrder.status === 'ready' && changedOrder.order_number && usesExpoGo()) {
-          void showReadyNotification(changedOrder.order_number);
+        if (changedOrder.status && changedOrder.status !== 'cancel_requested' && changedOrder.order_number && usesExpoGo()) {
+          void showOrderStatusNotification(changedOrder.order_number, changedOrder.status);
         }
       })
       .subscribe();
 
+    return () => { void supabase.removeChannel(channel); };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) { setUnreadNotifications(0); return; }
+    const loadUnread = async () => {
+      const { count } = await supabase
+        .from('order_notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .is('read_at', null);
+      setUnreadNotifications(count ?? 0);
+    };
+    void loadUnread();
+    const channel = supabase.channel(`customer-notification-badge-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_notifications', filter: `user_id=eq.${user.id}` }, () => void loadUnread())
+      .subscribe();
     return () => { void supabase.removeChannel(channel); };
   }, [user]);
 
@@ -309,6 +327,7 @@ function AppContent() {
                 onOpenMenu={() => openTab('menu')}
                 onOpenCart={() => setCartVisible(true)}
                 onOpenNotifications={() => setNotificationsVisible(true)}
+                unreadNotifications={unreadNotifications}
               />
             </View>
             <View key="menu" style={styles.page} collapsable={false}>
@@ -358,7 +377,7 @@ function AppContent() {
             />
           </Modal>
           <Modal visible={notificationsVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setNotificationsVisible(false)}>
-            <NotificationCenterScreen onClose={() => setNotificationsVisible(false)} />
+            <NotificationCenterScreen onClose={() => setNotificationsVisible(false)} onUnreadChange={setUnreadNotifications} />
           </Modal>
           <Modal visible={paymentSession !== null} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => closePayment()}>
             {paymentSession ? (

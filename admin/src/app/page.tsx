@@ -7,7 +7,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 
 type OrderStatus = 'payment_pending' | 'paid' | 'accepted' | 'preparing' | 'ready' | 'picked_up' | 'cancel_requested' | 'cancelled';
-type Filter = 'active' | 'new' | 'preparing' | 'ready' | 'all';
+type Filter = 'active' | 'new' | 'preparing' | 'ready' | 'completed' | 'cancelled' | 'all';
+type DateScope = 'today' | 'all';
 
 type OrderItem = {
   id: number;
@@ -29,6 +30,7 @@ type AdminOrder = {
   total_amount: number;
   pickup_at: string | null;
   pickup_type: 'asap' | 'scheduled' | null;
+  cancellation_reason: string | null;
   created_at: string;
   order_items: OrderItem[];
 };
@@ -43,12 +45,12 @@ const nextStatus: Partial<Record<OrderStatus, { status: OrderStatus; label: stri
   accepted: { status: 'preparing', label: '제조 시작' },
   preparing: { status: 'ready', label: '픽업 준비 완료' },
   ready: { status: 'picked_up', label: '픽업 완료' },
-  cancel_requested: { status: 'cancelled', label: '취소 승인' },
 };
 
 const filters: { key: Filter; label: string }[] = [
   { key: 'active', label: '진행 중' }, { key: 'new', label: '접수 됨' },
-  { key: 'preparing', label: '제조 중' }, { key: 'ready', label: '픽업 준비 완료' }, { key: 'all', label: '전체' },
+  { key: 'preparing', label: '제조 중' }, { key: 'ready', label: '픽업 준비 완료' },
+  { key: 'completed', label: '픽업 완료' }, { key: 'cancelled', label: '취소' }, { key: 'all', label: '전체' },
 ];
 
 const won = (value: number) => `${value.toLocaleString('ko-KR')}원`;
@@ -59,6 +61,7 @@ export default function Home() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [orders, setOrders] = useState<AdminOrder[]>([]);
   const [filter, setFilter] = useState<Filter>('active');
+  const [dateScope, setDateScope] = useState<DateScope>('today');
   const [loading, setLoading] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +76,7 @@ export default function Home() {
     setLoading(true);
     const { data, error: queryError } = await supabase
       .from('orders')
-      .select('id,order_number,status,payment_status,total_amount,pickup_at,pickup_type,created_at,order_items(id,menu_name,temperature,extra_shot,extra_shot_count,lightly,soy_milk,personal_tumbler,quantity)')
+      .select('id,order_number,status,payment_status,total_amount,pickup_at,pickup_type,cancellation_reason,created_at,order_items(id,menu_name,temperature,extra_shot,extra_shot_count,lightly,soy_milk,personal_tumbler,quantity)')
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -145,8 +148,8 @@ export default function Home() {
 
         if (order.status === 'paid' && previousStatus !== 'paid') {
           notifyAdmin('새 주문이 들어왔어요! ☕', `${order.order_number ? formatOrderNumber(order.order_number) : '신규 주문'}을 확인해주세요.`);
-        } else if (order.status === 'cancel_requested' && previousStatus !== 'cancel_requested') {
-          notifyAdmin('주문 취소 요청', `${order.order_number ? formatOrderNumber(order.order_number) : '주문'}의 취소 요청을 확인해주세요.`);
+        } else if (order.status === 'cancelled' && previousStatus !== 'cancelled') {
+          notifyAdmin('주문이 자동 취소됐어요', `${order.order_number ? formatOrderNumber(order.order_number) : '주문'}의 결제 취소가 완료됐어요.`);
         }
         void loadOrders();
       })
@@ -155,23 +158,28 @@ export default function Home() {
     return () => { void supabase.removeChannel(channel); };
   }, [accessDenied, loadOrders, session]);
 
-  const visibleOrders = useMemo(() => orders.filter((order) => {
+  const scopedOrders = useMemo(() => dateScope === 'today' ? orders.filter((order) => isTodayInSeoul(order.created_at)) : orders, [dateScope, orders]);
+
+  const visibleOrders = useMemo(() => scopedOrders.filter((order) => {
     if (filter === 'all') return true;
     if (filter === 'active') return isActive(order.status);
     if (filter === 'new') return isNew(order.status);
+    if (filter === 'completed') return order.status === 'picked_up';
     return order.status === filter;
-  }), [filter, orders]);
+  }), [filter, scopedOrders]);
 
   if (!isSupabaseConfigured) return <MessageScreen title="환경변수 설정이 필요해요" description="admin/.env.local 파일에 Supabase 공개 키를 넣어주세요." />;
   if (session === undefined) return <MessageScreen title="관리자 페이지 준비 중" description="로그인 정보를 확인하고 있어요." />;
   if (!session) return <AdminLogin />;
   if (accessDenied) return <AccessDenied email={session.user.email ?? ''} />;
 
-  const activeCount = orders.filter((order) => isActive(order.status)).length;
-  const sales = orders.filter((order) => order.payment_status === 'paid').reduce((sum, order) => sum + order.total_amount, 0);
+  const activeCount = scopedOrders.filter((order) => isActive(order.status)).length;
+  const todayOrders = orders.filter((order) => isTodayInSeoul(order.created_at));
+  const todaySales = todayOrders.filter((order) => order.payment_status === 'paid').reduce((sum, order) => sum + order.total_amount, 0);
   const countFor = (key: Filter) => key === 'active' ? activeCount : key === 'new'
-    ? orders.filter((order) => isNew(order.status)).length
-    : orders.filter((order) => order.status === key).length;
+    ? scopedOrders.filter((order) => isNew(order.status)).length
+    : key === 'completed' ? scopedOrders.filter((order) => order.status === 'picked_up').length
+    : scopedOrders.filter((order) => order.status === key).length;
 
   const enableAdminAlerts = async () => {
     if (typeof Notification === 'undefined') {
@@ -194,22 +202,6 @@ export default function Home() {
 
   const advanceOrder = async (orderId: string, currentStatus: OrderStatus, status: OrderStatus) => {
     setUpdatingId(orderId);
-    if (status === 'cancelled') {
-      const { error: cancelPaymentError } = await supabase.functions.invoke('cancel-payment', {
-        body: { orderId, cancelReason: '고객 요청으로 주문 취소' },
-      });
-      if (cancelPaymentError) {
-        setError('결제 취소에 실패했어요. 토스 결제 내역을 확인해주세요.');
-        setUpdatingId(null);
-        return;
-      }
-      knownOrderStatusRef.current.set(orderId, status);
-      const { error: notificationError } = await supabase.functions.invoke('send-order-notification', { body: { orderId } });
-      if (notificationError) setError('결제는 취소됐지만 고객 푸시 알림 전송에 실패했어요.');
-      await loadOrders();
-      setUpdatingId(null);
-      return;
-    }
     const { data: updatedOrder, error: updateError } = await supabase
       .from('orders')
       .update({ status })
@@ -239,6 +231,13 @@ export default function Home() {
     setUpdatingId(null);
   };
 
+  const requestAdvance = (order: AdminOrder) => {
+    const next = nextStatus[order.status];
+    if (!next) return;
+    if (!window.confirm(`${formatOrderNumber(order.order_number)} 주문을 ‘${next.label}’ 상태로 변경할까요?`)) return;
+    void advanceOrder(order.id, order.status, next.status);
+  };
+
   return (
     <div className="admin-shell">
       <aside className="sidebar">
@@ -257,13 +256,13 @@ export default function Home() {
         </header>
 
         <section className="stats" aria-label="오늘의 주문 현황">
-          <article><span className="stat-icon orange">▤</span><div><small>진행 중 주문</small><strong>{activeCount}건</strong><p>지금 준비가 필요해요</p></div></article>
-          <article><span className="stat-icon yellow">⌛</span><div><small>픽업 준비</small><strong>{orders.filter((order) => order.status === 'ready').length}건</strong><p>고객을 기다리고 있어요</p></div></article>
-          <article><span className="stat-icon green">₩</span><div><small>확인된 주문 금액</small><strong>{won(sales)}</strong><p>최근 주문 100건 기준</p></div></article>
+          <article><span className="stat-icon orange">▤</span><div><small>진행 중 주문</small><strong>{todayOrders.filter((order) => isActive(order.status)).length}건</strong><p>오늘 준비가 필요한 주문</p></div></article>
+          <article><span className="stat-icon yellow">⌛</span><div><small>픽업 준비</small><strong>{todayOrders.filter((order) => order.status === 'ready').length}건</strong><p>고객을 기다리고 있어요</p></div></article>
+          <article><span className="stat-icon green">₩</span><div><small>오늘 결제 주문 금액</small><strong>{won(todaySales)}</strong><p>결제 취소 주문 제외</p></div></article>
         </section>
 
         <section className="orders-panel">
-          <div className="panel-head"><div><h2>실제 주문</h2><p>상태 버튼을 누르면 고객 앱에도 반영돼요.</p></div><button className="refresh-button" onClick={() => void loadOrders()} disabled={loading}>↻ {loading ? '불러오는 중' : '새로고침'}</button></div>
+          <div className="panel-head"><div><h2>실제 주문</h2><p>상태 버튼을 누르면 확인창을 거쳐 고객 앱과 알림센터에도 반영돼요.</p></div><div className="panel-tools"><div className="date-scope"><button className={dateScope === 'today' ? 'selected' : ''} onClick={() => setDateScope('today')}>오늘</button><button className={dateScope === 'all' ? 'selected' : ''} onClick={() => setDateScope('all')}>최근 100건</button></div><button className="refresh-button" onClick={() => void loadOrders()} disabled={loading}>↻ {loading ? '불러오는 중' : '새로고침'}</button></div></div>
           {error ? <div className="admin-error">{error}</div> : null}
           <div className="filters" role="tablist" aria-label="주문 상태 필터">
             {filters.map((item) => <button key={item.key} className={filter === item.key ? 'selected' : ''} onClick={() => setFilter(item.key)}>{item.label}{item.key !== 'all' ? <span>{countFor(item.key)}</span> : null}</button>)}
@@ -274,7 +273,8 @@ export default function Home() {
                 <div className="order-head"><div><strong>{formatOrderNumber(order.order_number)}</strong><span>{formatOrderTime(order.created_at)} 주문</span></div><span className={`status ${statusTone(order.status)}`}>{statusText[order.status]}</span></div>
                 <div className={`pickup ${order.pickup_type === 'asap' ? 'asap' : ''}`}><span>⏰</span><div><small>고객 픽업 예정</small><strong>{formatPickup(order)}</strong></div></div>
                 <div className="items">{order.order_items.map((item) => <div className="item" key={item.id}><div><strong>{item.menu_name} <b>× {item.quantity}</b></strong><span>{formatOptions(item)}</span></div></div>)}</div>
-                <div className="order-foot"><div><small>결제금액</small><strong>{won(order.total_amount)}</strong></div>{nextStatus[order.status] ? <button disabled={updatingId === order.id} onClick={() => void advanceOrder(order.id, order.status, nextStatus[order.status]!.status)}>{updatingId === order.id ? '변경 중...' : nextStatus[order.status]!.label}<span>→</span></button> : <span className="completed">{statusText[order.status]}</span>}</div>
+                {order.cancellation_reason ? <div className="cancel-reason"><strong>취소 사유</strong><span>{order.cancellation_reason}</span></div> : null}
+                <div className="order-foot"><div><small>결제금액</small><strong>{won(order.total_amount)}</strong></div>{nextStatus[order.status] ? <button disabled={updatingId === order.id} onClick={() => requestAdvance(order)}>{updatingId === order.id ? '변경 중...' : nextStatus[order.status]!.label}<span>→</span></button> : <span className="completed">{statusText[order.status]}</span>}</div>
               </article>
             )) : <div className="empty-orders"><span>☕</span><strong>{loading ? '주문을 불러오는 중이에요' : '해당 주문이 없어요'}</strong><p>{loading ? '잠시만 기다려주세요.' : '다른 상태를 선택해보세요.'}</p></div>}
           </div>
@@ -320,6 +320,11 @@ function formatOrderTime(value: string) { return new Date(value).toLocaleTimeStr
 function formatPickup(order: AdminOrder) { if (order.pickup_type === 'asap') return '바로 픽업'; return order.pickup_at ? formatOrderTime(order.pickup_at) : '시간 미지정'; }
 function formatOptions(item: OrderItem) { return [item.temperature, item.extra_shot_count > 0 && `샷 추가 × ${item.extra_shot_count}`, item.lightly && '연하게', item.soy_milk && '두유 변경', item.personal_tumbler && '개인 텀블러'].filter(Boolean).join(' · '); }
 function formatOrderNumber(value: string) { const match = /^A-\d{8}-(\d+)$/.exec(value); return match ? `A-${match[1]}` : value; }
+function isTodayInSeoul(value: string) {
+  const orderDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  return orderDay === today;
+}
 
 function playAlertSound() {
   try {

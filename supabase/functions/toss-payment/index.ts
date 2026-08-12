@@ -3,6 +3,10 @@ import { withSupabase } from 'jsr:@supabase/server@^1';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type' };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
+const formatOrderNumber = (value: string) => {
+  const match = /^A-\d{8}-(\d+)$/.exec(value);
+  return match ? `A-${match[1]}` : value;
+};
 
 export default {
   fetch: withSupabase({ auth: 'none' }, async (req, ctx) => {
@@ -29,7 +33,7 @@ export default {
         if (!paymentKey || !orderId || !Number.isInteger(amount)) return json({ error: '결제 승인 정보가 올바르지 않아요.' }, 400);
 
         const { data: order } = await admin.from('orders')
-          .select('id,total_amount,payment_status')
+          .select('id,order_number,total_amount,payment_status')
           .eq('id', orderId)
           .eq('user_id', authData.user.id)
           .single();
@@ -58,6 +62,35 @@ export default {
           payment_method: payment.method, paid_at: new Date().toISOString(),
         }).eq('id', orderId).eq('user_id', authData.user.id);
         if (updateError) throw updateError;
+
+        await admin.from('order_notifications').upsert({
+          user_id: authData.user.id,
+          order_id: orderId,
+          status: 'paid',
+          title: '주문이 접수됐어요 ☕',
+          body: '매장에서 주문을 확인하고 있어요.',
+        }, { onConflict: 'order_id,status', ignoreDuplicates: true });
+
+        // 결제 승인이 끝난 직후에도 푸시를 보냅니다. 알림 전송 실패가 결제 승인 자체를 실패시키지는 않아요.
+        try {
+          const { data: tokens } = await admin.from('push_tokens').select('expo_push_token').eq('user_id', authData.user.id);
+          if (tokens?.length) {
+            await fetch('https://exp.host/--/api/v2/push/send', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify(tokens.map(({ expo_push_token }) => ({
+                to: expo_push_token,
+                sound: 'default',
+                channelId: 'orders',
+                title: '주문이 접수됐어요 ☕',
+                body: `${formatOrderNumber(order.order_number)} · 매장에서 주문을 확인하고 있어요.`,
+                data: { screen: 'notifications', orderId, status: 'paid' },
+              }))),
+            });
+          }
+        } catch {
+          // 알림은 보조 기능이므로 Toss 결제 승인 결과는 그대로 반환합니다.
+        }
         return json({ ok: true });
       }
 

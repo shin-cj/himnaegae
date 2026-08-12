@@ -91,12 +91,23 @@ export default {
         );
       }
 
+      const { error: historyError } = await admin
+        .from('order_notifications')
+        .upsert({
+          user_id: order.user_id,
+          order_id: order.id,
+          status: order.status,
+          title: notification.title,
+          body: notification.body,
+        }, { onConflict: 'order_id,status', ignoreDuplicates: true });
+      if (historyError) throw historyError;
+
       const { data: tokens, error: tokenError } = await admin
         .from('push_tokens')
         .select('expo_push_token')
         .eq('user_id', order.user_id);
       if (tokenError) throw tokenError;
-      if (!tokens?.length) return json({ ok: true, sent: 0 });
+      if (!tokens?.length) return json({ ok: true, sent: 0, historySaved: true });
 
       const pushResponse = await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
