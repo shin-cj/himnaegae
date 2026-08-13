@@ -22,3 +22,6 @@ Thumbs.db
 
 # Local-only QR code
 expo-qr.png
+
+# Supabase CLI local metadata
+supabase/.temp/

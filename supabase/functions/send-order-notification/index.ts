@@ -43,6 +43,9 @@ export default {
 
       const body = await request.json() as { orderId?: unknown };
       const orderId = String(body.orderId ?? '');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
+        return json({ error: 'Invalid order ID' }, 400);
+      }
       const { data: order, error: orderError } = await admin
         .from('orders')
         .select('id,user_id,order_number,status')
@@ -91,7 +94,7 @@ export default {
         );
       }
 
-      const { error: historyError } = await admin
+      const { data: savedNotification, error: historyError } = await admin
         .from('order_notifications')
         .upsert({
           user_id: order.user_id,
@@ -99,8 +102,11 @@ export default {
           status: order.status,
           title: notification.title,
           body: notification.body,
-        }, { onConflict: 'order_id,status', ignoreDuplicates: true });
+        }, { onConflict: 'order_id,status', ignoreDuplicates: true })
+        .select('id')
+        .maybeSingle();
       if (historyError) throw historyError;
+      if (!savedNotification) return json({ ok: true, sent: 0, duplicate: true });
 
       const { data: tokens, error: tokenError } = await admin
         .from('push_tokens')
@@ -112,6 +118,7 @@ export default {
       const pushResponse = await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify(
           tokens.map(({ expo_push_token }) => ({
             to: expo_push_token,
@@ -128,11 +135,15 @@ export default {
         ),
       });
 
-      const result = await pushResponse.json();
-      if (!pushResponse.ok) return json({ error: 'Expo push service rejected the request', detail: result }, 502);
-      return json({ ok: true, sent: tokens.length, result });
+      const result = await pushResponse.json().catch(() => null);
+      if (!pushResponse.ok) {
+        console.error('Expo push service rejected the request', { status: pushResponse.status, result });
+        return json({ error: 'Expo push service rejected the request' }, 502);
+      }
+      return json({ ok: true, sent: tokens.length });
     } catch (error) {
-      return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
+      console.error('Order notification function failed', error);
+      return json({ error: 'Notification service error' }, 500);
     }
   },
 };

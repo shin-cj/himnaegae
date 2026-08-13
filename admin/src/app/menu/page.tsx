@@ -34,8 +34,8 @@ export default function MenuManagementPage() {
     void (async () => {
       const { data } = await supabase.auth.getSession();
       if (!data.session) { router.replace('/'); return; }
-      const { error: accessError } = await supabase.rpc('claim_first_admin');
-      if (accessError) { setError('관리자 권한이 없어요.'); setLoading(false); return; }
+      const { data: isAdmin, error: accessError } = await supabase.rpc('is_admin');
+      if (accessError || !isAdmin) { setError('관리자 권한이 없어요.'); setLoading(false); return; }
       await loadMenus();
     })();
   }, [loadMenus, router]);

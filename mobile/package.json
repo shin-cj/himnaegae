@@ -8,7 +8,9 @@
     "@supabase/supabase-js": "^2.112.2",
     "expo": "~54.0.0",
     "expo-constants": "~18.0.13",
+    "expo-dev-client": "~6.0.21",
     "expo-device": "~8.0.10",
+    "expo-linking": "~8.0.12",
     "expo-notifications": "~0.32.17",
     "expo-status-bar": "~3.0.9",
     "expo-web-browser": "~15.0.11",
@@ -25,6 +27,8 @@
   },
   "scripts": {
     "start": "expo start",
+    "start:dev-client": "expo start --dev-client",
+    "build:ios:development": "npx eas-cli build --platform ios --profile development",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"

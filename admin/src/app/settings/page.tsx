@@ -41,8 +41,8 @@ export default function SettingsPage() {
   const loadSettings = useCallback(async () => {
     const { data: sessionData } = await supabase.auth.getSession();
     if (!sessionData.session) { router.replace('/'); return; }
-    const { error: accessError } = await supabase.rpc('claim_first_admin');
-    if (accessError) { setError('관리자 권한이 없어요.'); setLoading(false); return; }
+    const { data: isAdmin, error: accessError } = await supabase.rpc('is_admin');
+    if (accessError || !isAdmin) { setError('관리자 권한이 없어요.'); setLoading(false); return; }
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     const [settingsResult, ordersResult, menusResult] = await Promise.all([
       supabase.from('store_settings').select('*').eq('id', 1).single(),

@@ -1,6 +1,6 @@
 import { type ComponentProps, useState } from 'react';
 import {
-  Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView,
+  Alert, KeyboardAvoidingView, Platform, Pressable , ScrollView,
   StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,14 +10,15 @@ import { colors } from '../theme/colors';
 
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
-  const { signIn, signUp } = useAuth();
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const { requestPasswordReset, signIn, signUp } = useAuth();
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordCheck, setPasswordCheck] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const isSignup = mode === 'signup';
+  const isForgot = mode === 'forgot';
 
   const submit = async () => {
     if (isSignup && nickname.trim().length < 2) {
@@ -28,7 +29,7 @@ export function AuthScreen() {
       Alert.alert('이메일 확인', '사용할 이메일을 정확히 입력해주세요.');
       return;
     }
-    if (password.length < 8) {
+    if (!isForgot && password.length < 8) {
       Alert.alert('비밀번호 확인', '비밀번호를 8글자 이상 입력해주세요.');
       return;
     }
@@ -39,7 +40,14 @@ export function AuthScreen() {
 
     try {
       setSubmitting(true);
-      if (isSignup) {
+      if (isForgot) {
+        await requestPasswordReset(email);
+        Alert.alert(
+          '이메일을 확인해주세요',
+          '가입된 이메일이라면 비밀번호 변경 링크를 보냈어요. 메일이 보이지 않으면 스팸함도 확인해주세요.',
+          [{ text: '확인', onPress: () => setMode('login') }],
+        );
+      } else if (isSignup) {
         const result = await signUp(email, password, nickname);
         if (result.needsEmailConfirmation) {
           Alert.alert('가입 신청 완료', '입력한 이메일에서 확인 링크를 누른 뒤 로그인해주세요.');
@@ -54,7 +62,7 @@ export function AuthScreen() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '잠시 후 다시 시도해주세요.';
-      Alert.alert(isSignup ? '회원가입 실패' : '로그인 실패', message);
+      Alert.alert(isForgot ? '이메일을 보내지 못했어요' : isSignup ? '회원가입 실패' : '로그인 실패', message);
     } finally {
       setSubmitting(false);
     }
@@ -64,28 +72,31 @@ export function AuthScreen() {
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingTop: insets.top + 30 }]}>
         <Text style={styles.eyebrow}>힘내개 COFFEE</Text>
-        <Text style={styles.title}>{isSignup ? '처음 오셨군요!' : '다시 만나 반가워요!'}</Text>
+        <Text style={styles.title}>{isForgot ? '비밀번호를 잊으셨나요?' : isSignup ? '처음 오셨군요!' : '다시 만나 반가워요!'}</Text>
         <Text style={styles.description}>
-          {isSignup ? '간단히 가입하고 주문과 픽업 알림을 받아보세요.' : '주문 내역과 픽업 상태를 확인해보세요.'}
+          {isForgot ? '가입한 이메일로 안전한 비밀번호 변경 링크를 보내드릴게요.' : isSignup ? '간단히 가입하고 주문과 픽업 알림을 받아보세요.' : '주문 내역과 픽업 상태를 확인해보세요.'}
         </Text>
 
-        <View style={styles.switcher}>
+        {!isForgot ? <View style={styles.switcher}>
           <Pressable style={[styles.switchButton, !isSignup && styles.switchButtonActive]} onPress={() => setMode('login')}>
             <Text style={[styles.switchText, !isSignup && styles.switchTextActive]}>로그인</Text>
           </Pressable>
           <Pressable style={[styles.switchButton, isSignup && styles.switchButtonActive]} onPress={() => setMode('signup')}>
             <Text style={[styles.switchText, isSignup && styles.switchTextActive]}>회원가입</Text>
           </Pressable>
-        </View>
+        </View> : <View style={styles.forgotSpacer} />}
 
-        {isSignup ? <Field label="닉네임" value={nickname} onChangeText={setNickname} placeholder="앱에서 사용할 이름" /> : null}
+        {isSignup ? <Field label="닉네임" value={nickname} onChangeText={setNickname} placeholder="앱에서 사용할 이름" maxLength={40} /> : null}
         <Field label="이메일" value={email} onChangeText={setEmail} placeholder="coffee@example.com" keyboardType="email-address" autoCapitalize="none" />
-        <Field label="비밀번호" value={password} onChangeText={setPassword} placeholder="8글자 이상" secureTextEntry autoCapitalize="none" />
+        {!isForgot ? <Field label="비밀번호" value={password} onChangeText={setPassword} placeholder="8글자 이상" secureTextEntry autoCapitalize="none" /> : null}
         {isSignup ? <Field label="비밀번호 확인" value={passwordCheck} onChangeText={setPasswordCheck} placeholder="한 번 더 입력해주세요" secureTextEntry autoCapitalize="none" /> : null}
 
         <Pressable disabled={submitting} onPress={submit} style={({ pressed }) => [styles.submitButton, (pressed || submitting) && styles.buttonPressed]}>
-          <Text style={styles.submitText}>{submitting ? '처리 중...' : isSignup ? '가입하기' : '로그인'}</Text>
+          <Text style={styles.submitText}>{submitting ? '처리 중...' : isForgot ? '변경 링크 받기' : isSignup ? '가입하기' : '로그인'}</Text>
         </Pressable>
+        {!isSignup ? <Pressable disabled={submitting} onPress={() => setMode(isForgot ? 'login' : 'forgot')} style={styles.forgotButton}>
+          <Text style={styles.forgotText}>{isForgot ? '로그인으로 돌아가기' : '비밀번호를 잊으셨나요?'}</Text>
+        </Pressable> : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -109,6 +120,7 @@ const styles = StyleSheet.create({
   title: { marginTop: 10, color: colors.dark, fontSize: 28, fontWeight: '900' },
   description: { marginTop: 9, color: colors.muted, fontSize: 15, lineHeight: 22 },
   switcher: { flexDirection: 'row', marginTop: 28, marginBottom: 22, padding: 5, borderRadius: 16, backgroundColor: '#F2E8DA' },
+  forgotSpacer: { height: 34 },
   switchButton: { flex: 1, alignItems: 'center', paddingVertical: 11, borderRadius: 12 },
   switchButtonActive: { backgroundColor: colors.white },
   switchText: { color: colors.muted, fontSize: 15, fontWeight: '700' },
@@ -119,4 +131,6 @@ const styles = StyleSheet.create({
   submitButton: { alignItems: 'center', marginTop: 8, paddingVertical: 17, borderRadius: 17, backgroundColor: colors.orange },
   buttonPressed: { opacity: 0.65 },
   submitText: { color: colors.white, fontSize: 16, fontWeight: '900' },
+  forgotButton: { alignItems: 'center', paddingVertical: 18 },
+  forgotText: { color: colors.muted, fontSize: 14, fontWeight: '800', textDecorationLine: 'underline' },
 });

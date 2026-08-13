@@ -1,5 +1,4 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
-import { createSupabaseContext } from 'npm:@supabase/server@^1';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const cors = {
@@ -19,16 +18,14 @@ const formatOrderNumber = (value: string) => {
 
 const customerCancellableStatuses = ['payment_pending', 'paid', 'accepted'];
 
+type OrderStatus = 'payment_pending' | 'paid' | 'accepted' | 'preparing' | 'ready' | 'picked_up' | 'cancel_requested' | 'cancelled';
+
 export default {
   fetch: async (request: Request) => {
     if (request.method === 'OPTIONS') return new Response('ok', { headers: cors });
     if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
     try {
-      const { data: context, error: contextError } = await createSupabaseContext(request, { auth: 'user' });
-      const requesterId = context?.userClaims?.sub;
-      if (contextError || !requesterId) return json({ error: '로그인이 필요해요.' }, 401);
-
       const supabaseUrl = Deno.env.get('SUPABASE_URL');
       const secretKeysRaw = Deno.env.get('SUPABASE_SECRET_KEYS');
       const secretKeys = secretKeysRaw ? JSON.parse(secretKeysRaw) as Record<string, string> : {};
@@ -41,6 +38,17 @@ export default {
       }
 
       const admin = createClient(supabaseUrl, serviceRoleKey);
+      const authHeader = request.headers.get('Authorization') ?? '';
+      const accessToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+      if (!accessToken) return json({ error: '로그인 정보가 요청에 포함되지 않았어요.' }, 401);
+
+      const { data: authData, error: authError } = await admin.auth.getUser(accessToken);
+      const requesterId = authData.user?.id;
+      if (authError || !requesterId) {
+        console.error('Cancel authentication failed', authError?.message ?? 'user not found');
+        return json({ error: '로그인 시간이 만료됐어요. 다시 로그인해주세요.' }, 401);
+      }
+
       const body = await request.json();
       const orderId = String(body.orderId ?? '');
       const cancelReason = String(body.cancelReason ?? '고객 요청으로 주문 취소').trim().slice(0, 200);
@@ -61,51 +69,145 @@ export default {
         return json({ ok: true, alreadyCancelled: true });
       }
 
-      if (![...customerCancellableStatuses, 'cancel_requested'].includes(order.status)) {
-        return json({ error: '이미 제조가 시작되어 결제를 취소할 수 없어요.' }, 409);
+      if (order.payment_status === 'confirming') {
+        return json({
+          error: '결제 확인이 진행 중이에요. 잠시 후 다시 시도해주세요.',
+          code: 'PAYMENT_CONFIRM_IN_PROGRESS',
+          failureType: 'duplicate',
+        }, 409);
       }
 
-      // 제조 시작과 고객 취소가 동시에 눌려도 한쪽만 성공하도록 먼저 상태를 선점합니다.
-      const previousStatus = order.status;
-      if (order.status !== 'cancel_requested') {
-        const { data: claimedOrder, error: claimError } = await admin
-          .from('orders')
-          .update({ status: 'cancel_requested', cancellation_reason: cancelReason })
-          .eq('id', order.id)
-          .in('status', customerCancellableStatuses)
-          .select('id')
-          .maybeSingle();
-        if (claimError) throw claimError;
-        if (!claimedOrder) return json({ error: '이미 제조가 시작되어 결제를 취소할 수 없어요.' }, 409);
+      const customerCanCancel = isOwner
+        && [...customerCancellableStatuses, 'cancel_requested'].includes(order.status);
+      const adminCanCancel = isAdmin && order.status !== 'cancelled';
+
+      if (!customerCanCancel && !adminCanCancel) {
+        return json({
+          error: isOwner
+            ? '이미 제조가 시작되어 고객이 직접 취소할 수 없어요.'
+            : '이미 취소된 주문이에요.',
+        }, 409);
       }
+
+      const previousStatus = order.status;
+
+      let tossSecretKey: string | undefined;
+      if (order.payment_status === 'paid') {
+        if (!order.payment_key) {
+          return json({
+            error: '토스 결제키가 없는 주문이에요.',
+            code: 'PAYMENT_KEY_MISSING',
+            failureType: 'configuration',
+            orderStateRestored: true,
+          }, 409);
+        }
+        tossSecretKey = Deno.env.get('TOSS_SECRET_KEY');
+        if (!tossSecretKey) {
+          return json({
+            error: '토스 시크릿 키가 설정되지 않았어요.',
+            code: 'TOSS_SECRET_MISSING',
+            failureType: 'configuration',
+            orderStateRestored: true,
+          }, 500);
+        }
+      }
+
+      // 제조 시작과 취소가 동시에 눌려도 먼저 상태를 선점한 작업만 성공합니다.
+      const { data: claimedOrder, error: claimError } = await admin
+        .from('orders')
+        .update({ status: 'cancel_requested', cancellation_reason: cancelReason })
+        .eq('id', order.id)
+        .in('status', isAdmin ? [previousStatus] : [...customerCancellableStatuses, 'cancel_requested'])
+        .select('id')
+        .maybeSingle();
+      if (claimError) throw claimError;
+      if (!claimedOrder) {
+        return json({
+          error: isAdmin
+            ? '주문 상태가 먼저 변경됐어요. 새로고침 후 다시 시도해주세요.'
+            : '이미 제조가 시작되어 고객이 직접 취소할 수 없어요.',
+          code: 'ORDER_STATUS_CHANGED',
+          failureType: 'status',
+        }, 409);
+      }
+
+      const restorePreviousOrderState = async () => {
+        const { data: restoredOrder, error: restoreError } = await admin
+          .from('orders')
+          .update({ status: previousStatus, cancellation_reason: order.cancellation_reason })
+          .eq('id', order.id)
+          .eq('status', 'cancel_requested')
+          .select('status')
+          .maybeSingle();
+        const restored = !restoreError && restoredOrder?.status === previousStatus;
+
+        if (!restored) {
+          console.error('Order status restore failed', {
+            orderId: order.id,
+            previousStatus,
+            message: restoreError?.message ?? 'order was not restored',
+          });
+        }
+        return restored;
+      };
 
       let nextPaymentStatus = 'cancelled';
 
       if (order.payment_status === 'paid') {
-        if (!order.payment_key) return json({ error: '토스 결제키가 없는 주문이에요.' }, 409);
-
-        const tossSecretKey = Deno.env.get('TOSS_SECRET_KEY');
-        if (!tossSecretKey) return json({ error: '토스 시크릿 키가 설정되지 않았어요.' }, 500);
-
-        const tossResponse = await fetch(
-          `https://api.tosspayments.com/v1/payments/${encodeURIComponent(order.payment_key)}/cancel`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Basic ${btoa(`${tossSecretKey}:`)}`,
-              'Content-Type': 'application/json',
-              'Idempotency-Key': `cancel-${order.id}`,
+        let tossResponse: Response;
+        try {
+          tossResponse = await fetch(
+            `https://api.tosspayments.com/v1/payments/${encodeURIComponent(order.payment_key)}/cancel`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Basic ${btoa(`${tossSecretKey}:`)}`,
+                'Content-Type': 'application/json',
+                'Idempotency-Key': `cancel-${order.id}`,
+              },
+              signal: AbortSignal.timeout(15_000),
+              body: JSON.stringify({ cancelReason }),
             },
-            body: JSON.stringify({ cancelReason }),
-          },
-        );
+          );
+        } catch {
+          const orderStateRestored = await restorePreviousOrderState();
+          return json({
+            error: orderStateRestored
+              ? '토스 결제 서버에 연결하지 못했어요.'
+              : '토스 연결에 실패했고 주문 상태를 복구하지 못했어요. 주문 상태를 확인해주세요.',
+            code: orderStateRestored ? 'TOSS_NETWORK_ERROR' : 'ORDER_RESTORE_FAILED',
+            failureType: orderStateRestored ? 'toss' : 'rollback',
+            orderStateRestored,
+          }, 503);
+        }
 
-        const tossResult = await tossResponse.json();
-        if (!tossResponse.ok) {
-          if (previousStatus !== 'cancel_requested') {
-            await admin.from('orders').update({ status: previousStatus, cancellation_reason: order.cancellation_reason }).eq('id', order.id).eq('status', 'cancel_requested');
+        const tossResult = await tossResponse.json().catch(() => ({}));
+        const alreadyCancelledByToss = tossResult?.code === 'ALREADY_CANCELED_PAYMENT';
+        if (!tossResponse.ok && !alreadyCancelledByToss) {
+          console.error('Toss cancellation failed', {
+            orderId: order.id,
+            status: tossResponse.status,
+            code: tossResult?.code,
+            message: tossResult?.message,
+          });
+          const orderStateRestored = await restorePreviousOrderState();
+
+          if (!orderStateRestored) {
+            return json({
+              error: '환불에 실패했고 주문 상태를 복구하지 못했어요. 주문 상태를 확인해주세요.',
+              code: 'ORDER_RESTORE_FAILED',
+              failureType: 'rollback',
+              orderStateRestored: false,
+            }, 500);
           }
-          return json({ error: tossResult.message ?? '토스 결제 취소에 실패했어요.' }, 400);
+
+          return json({
+            error: tossResult.message ?? '토스 결제 취소에 실패했어요.',
+            code: tossResult.code ?? 'TOSS_CANCEL_FAILED',
+            failureType: 'toss',
+            orderStateRestored: true,
+            previousStatus: previousStatus as OrderStatus,
+          }, 400);
         }
         nextPaymentStatus = 'refunded';
       }

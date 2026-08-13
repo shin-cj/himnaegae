@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { supabase } from '@/lib/supabase';
 
-type MemberStatus = 'active' | 'blocked';
+type MemberStatus = 'active' | 'blocked' | 'withdrawn';
 type Filter = 'all' | MemberStatus;
 type Member = {
   user_id: string;
@@ -37,8 +37,8 @@ export default function MembersPage() {
     const { data: sessionData } = await supabase.auth.getSession();
     setLoading(true);
     if (!sessionData.session) { router.replace('/'); return; }
-    const { error: accessError } = await supabase.rpc('claim_first_admin');
-    if (accessError) { setError('관리자 권한이 없어요.'); setLoading(false); return; }
+    const { data: isAdmin, error: accessError } = await supabase.rpc('is_admin');
+    if (accessError || !isAdmin) { setError('관리자 권한이 없어요.'); setLoading(false); return; }
     const { data, error: queryError } = await supabase.rpc('get_admin_members');
     if (queryError) setError('회원 정보를 불러오지 못했어요. DB 설정을 확인해주세요.');
     else { setMembers((data ?? []) as Member[]); setError(null); }
@@ -57,6 +57,7 @@ export default function MembersPage() {
   }), [filter, members, query]);
 
   const updateStatus = async (member: Member) => {
+    if (member.status === 'withdrawn') return;
     const nextStatus: MemberStatus = member.status === 'active' ? 'blocked' : 'active';
     const message = nextStatus === 'blocked'
       ? `${member.nickname} 회원의 이용을 제한할까요?`
@@ -99,7 +100,7 @@ export default function MembersPage() {
         <section className="members-panel">
           <div className="members-tools">
             <div className="member-filters">
-              {([{ key: 'all', label: '전체' }, { key: 'active', label: '정상 이용' }, { key: 'blocked', label: '이용 제한' }] as const).map((item) => (
+              {([{ key: 'all', label: '전체' }, { key: 'active', label: '정상 이용' }, { key: 'blocked', label: '이용 제한' }, { key: 'withdrawn', label: '탈퇴' }] as const).map((item) => (
                 <button key={item.key} className={filter === item.key ? 'selected' : ''} onClick={() => setFilter(item.key)}>{item.label}</button>
               ))}
             </div>
@@ -112,8 +113,10 @@ export default function MembersPage() {
               <article className="member-row" key={member.user_id}>
                 <div className="member-identity"><span>{member.nickname.slice(0, 1)}</span><div><strong>{member.nickname}</strong><small>{member.email}</small></div></div>
                 <span>{date(member.created_at)}</span><strong>{member.order_count}건</strong><strong>{won(member.total_spent)}</strong><span>{date(member.last_order_at)}</span>
-                <span className={`member-status ${member.status}`}>{member.status === 'active' ? '정상 이용' : '이용 제한'}</span>
-                <button disabled={updatingId === member.user_id} className="member-manage" onClick={() => void updateStatus(member)}>{updatingId === member.user_id ? '변경 중' : member.status === 'active' ? '이용 제한' : '제한 해제'}</button>
+                <span className={`member-status ${member.status}`}>{member.status === 'active' ? '정상 이용' : member.status === 'blocked' ? '이용 제한' : '탈퇴'}</span>
+                {member.status === 'withdrawn'
+                  ? <span className="member-withdrawn">변경 불가</span>
+                  : <button disabled={updatingId === member.user_id} className="member-manage" onClick={() => void updateStatus(member)}>{updatingId === member.user_id ? '변경 중' : member.status === 'active' ? '이용 제한' : '제한 해제'}</button>}
               </article>
             ))}
             {loading ? <div className="empty-menu"><span>☺</span><strong>회원 정보를 불러오는 중이에요</strong></div> : null}

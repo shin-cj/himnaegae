@@ -26,7 +26,7 @@ type AdminOrder = {
   id: string;
   order_number: string;
   status: OrderStatus;
-  payment_status: 'pending' | 'paid' | 'cancelled' | 'refunded' | 'failed';
+  payment_status: 'pending' | 'confirming' | 'paid' | 'cancelled' | 'refunded' | 'failed';
   total_amount: number;
   pickup_at: string | null;
   pickup_type: 'asap' | 'scheduled' | null;
@@ -53,6 +53,56 @@ const filters: { key: Filter; label: string }[] = [
   { key: 'completed', label: '픽업 완료' }, { key: 'cancelled', label: '취소' }, { key: 'all', label: '전체' },
 ];
 
+const cancelReasonPresets = [
+  '현장 결제로 변경',
+  '고객 요청으로 주문 취소',
+  '제조 지연으로 주문 취소',
+  '재료 소진으로 주문 취소',
+] as const;
+
+type CancelFailurePayload = {
+  error?: string;
+  code?: string;
+  failureType?: 'duplicate' | 'configuration' | 'status' | 'toss' | 'rollback';
+  orderStateRestored?: boolean;
+};
+
+type CancelFeedback = {
+  title: string;
+  message: string;
+};
+
+const cancellationFailureCopy = (payload: CancelFailurePayload | null, fallback: string): CancelFeedback => {
+  if (payload?.failureType === 'toss') {
+    return {
+      title: '결제 환불에 실패했어요',
+      message: `${payload.error ?? fallback} 주문은 취소 전 상태로 안전하게 되돌렸어요. 잠시 후 다시 시도해주세요.`,
+    };
+  }
+  if (payload?.failureType === 'rollback') {
+    return {
+      title: '주문 상태를 확인해주세요',
+      message: payload.error ?? '환불 결과와 주문 상태를 확인하지 못했어요. 새로고침 후 다시 확인해주세요.',
+    };
+  }
+  if (payload?.failureType === 'duplicate') {
+    return {
+      title: '이미 취소 처리 중이에요',
+      message: payload.error ?? '버튼을 다시 누르지 말고 잠시 후 주문 상태를 확인해주세요.',
+    };
+  }
+  if (payload?.failureType === 'status') {
+    return {
+      title: '주문 상태가 변경됐어요',
+      message: payload.error ?? '새로고침 후 현재 주문 상태를 확인해주세요.',
+    };
+  }
+  return {
+    title: '주문을 취소하지 못했어요',
+    message: payload?.error ?? fallback,
+  };
+};
+
 const won = (value: number) => `${value.toLocaleString('ko-KR')}원`;
 const isActive = (status: OrderStatus) => !['picked_up', 'cancelled'].includes(status);
 const isNew = (status: OrderStatus) => status === 'paid' || status === 'accepted';
@@ -68,6 +118,10 @@ export default function Home() {
   const [accessDenied, setAccessDenied] = useState(false);
   const [alertsEnabled, setAlertsEnabled] = useState(false);
   const [alertToast, setAlertToast] = useState<{ title: string; body: string } | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<AdminOrder | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelError, setCancelError] = useState<CancelFeedback | null>(null);
+  const cancelRequestInFlightRef = useRef(false);
   const alertsEnabledRef = useRef(false);
   const knownOrderStatusRef = useRef(new Map<string, OrderStatus>());
   const initialOrdersLoadedRef = useRef(false);
@@ -111,9 +165,9 @@ export default function Home() {
     if (!session) return;
     let active = true;
     void (async () => {
-      const { error: claimError } = await supabase.rpc('claim_first_admin');
+      const { data: isAdmin, error: accessError } = await supabase.rpc('is_admin');
       if (!active) return;
-      if (claimError) {
+      if (accessError || !isAdmin) {
         setAccessDenied(true);
         setError('이 계정에는 관리자 권한이 없어요.');
         return;
@@ -202,15 +256,13 @@ export default function Home() {
 
   const advanceOrder = async (orderId: string, currentStatus: OrderStatus, status: OrderStatus) => {
     setUpdatingId(orderId);
-    const { data: updatedOrder, error: updateError } = await supabase
-      .from('orders')
-      .update({ status })
-      .eq('id', orderId)
-      .eq('status', currentStatus)
-      .select('id')
-      .maybeSingle();
+    const { data: updatedStatus, error: updateError } = await supabase.rpc('advance_order_status', {
+      p_order_id: orderId,
+      p_expected_status: currentStatus,
+      p_next_status: status,
+    });
     if (updateError) setError('주문 상태를 변경하지 못했어요.');
-    else if (!updatedOrder) setError('고객 요청으로 주문 상태가 먼저 바뀌었어요. 새로고침 후 확인해주세요.');
+    else if (updatedStatus !== status) setError('고객 요청으로 주문 상태가 먼저 바뀌었어요. 새로고침 후 확인해주세요.');
     else {
       knownOrderStatusRef.current.set(orderId, status);
       const notificationStatuses: OrderStatus[] = [
@@ -231,12 +283,119 @@ export default function Home() {
     setUpdatingId(null);
   };
 
+  const canAdminCancel = (status: OrderStatus) => status !== 'cancelled';
+
   const requestAdvance = (order: AdminOrder) => {
     const next = nextStatus[order.status];
     if (!next) return;
     if (!window.confirm(`${formatOrderNumber(order.order_number)} 주문을 ‘${next.label}’ 상태로 변경할까요?`)) return;
     void advanceOrder(order.id, order.status, next.status);
   };
+
+  const openCancelModal = (order: AdminOrder) => {
+    setCancelTarget(order);
+    setCancelReason('고객 요청으로 주문 취소');
+    setCancelError(null);
+  };
+
+  const cancelOrder = async () => {
+    if (!cancelTarget || cancelRequestInFlightRef.current) return;
+
+    if (!window.navigator.onLine) {
+      setCancelError({
+        title: '인터넷 연결을 확인해주세요',
+        message: '취소 요청을 보내지 않았어요. 주문 상태는 그대로 유지됩니다. 연결 후 다시 시도해주세요.',
+      });
+      return;
+    }
+
+    const reason = cancelReason.trim() || '관리자 요청으로 주문 취소';
+
+    const order = cancelTarget;
+
+    cancelRequestInFlightRef.current = true;
+    setUpdatingId(order.id);
+    setError(null);
+    setCancelError(null);
+    const abortController = new AbortController();
+    const requestTimeoutId = window.setTimeout(() => abortController.abort(), 20_000);
+
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      let activeSession = sessionData.session;
+
+      if (sessionError || !activeSession) {
+        setCancelError({ title: '로그인이 필요해요', message: '로그인 세션을 확인할 수 없어요. 다시 로그인해주세요.' });
+        return;
+      }
+
+      const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError || !refreshedData.session) {
+        setCancelError({ title: '로그인 시간이 만료됐어요', message: '다시 로그인한 뒤 주문 취소를 진행해주세요.' });
+        return;
+      }
+      activeSession = refreshedData.session;
+
+      const { data: cancelData, error: invokeError } = await supabase.functions.invoke(
+        'cancel-payment',
+        {
+          headers: {
+            Authorization: `Bearer ${activeSession.access_token}`,
+          },
+          signal: abortController.signal,
+          body: {
+            orderId: order.id,
+            cancelReason: reason,
+          },
+        },
+      );
+
+      if (invokeError) {
+        let detail = invokeError.message;
+        const context = (invokeError as { context?: Response }).context;
+        let payload: CancelFailurePayload | null = null;
+        if (context) {
+          payload = await context.clone().json().catch(() => null) as CancelFailurePayload | null;
+          if (payload?.error) detail = payload.error;
+        }
+        const networkFailure = !window.navigator.onLine || /network|fetch|connection|인터넷|abort/i.test(detail);
+        setCancelError(networkFailure && !payload
+          ? {
+              title: '연결 상태를 확인해주세요',
+              message: '요청 시간이 초과됐거나 인터넷 연결이 끊겼어요. 주문을 새로고침하고 상태를 먼저 확인해주세요.',
+            }
+          : cancellationFailureCopy(payload, detail));
+        return;
+      }
+
+      if (!cancelData?.ok) {
+        setCancelError({
+          title: '취소 결과를 확인하지 못했어요',
+          message: '주문을 새로고침해 상태를 확인해주세요. 확인 전에는 취소 버튼을 다시 누르지 마세요.',
+        });
+        return;
+      }
+
+      knownOrderStatusRef.current.set(order.id, 'cancelled');
+      setCancelTarget(null);
+    } catch (invokeError) {
+      const detail = invokeError instanceof Error ? invokeError.message : '알 수 없는 오류';
+      const networkFailure = !window.navigator.onLine || /network|fetch|connection|인터넷|abort/i.test(detail);
+      setCancelError(networkFailure
+        ? {
+            title: '인터넷 연결이 끊겼어요',
+            message: '요청 결과를 확인할 수 없어요. 연결 후 주문을 새로고침하고 상태를 먼저 확인해주세요.',
+          }
+        : { title: '취소 요청 중 오류가 발생했어요', message: detail });
+    } finally {
+      window.clearTimeout(requestTimeoutId);
+      cancelRequestInFlightRef.current = false;
+      setUpdatingId(null);
+      await loadOrders();
+    }
+  };
+
+  const cancelProcessing = Boolean(cancelTarget && updatingId === cancelTarget.id);
 
   return (
     <div className="admin-shell">
@@ -274,13 +433,42 @@ export default function Home() {
                 <div className={`pickup ${order.pickup_type === 'asap' ? 'asap' : ''}`}><span>⏰</span><div><small>고객 픽업 예정</small><strong>{formatPickup(order)}</strong></div></div>
                 <div className="items">{order.order_items.map((item) => <div className="item" key={item.id}><div><strong>{item.menu_name} <b>× {item.quantity}</b></strong><span>{formatOptions(item)}</span></div></div>)}</div>
                 {order.cancellation_reason ? <div className="cancel-reason"><strong>취소 사유</strong><span>{order.cancellation_reason}</span></div> : null}
-                <div className="order-foot"><div><small>결제금액</small><strong>{won(order.total_amount)}</strong></div>{nextStatus[order.status] ? <button disabled={updatingId === order.id} onClick={() => requestAdvance(order)}>{updatingId === order.id ? '변경 중...' : nextStatus[order.status]!.label}<span>→</span></button> : <span className="completed">{statusText[order.status]}</span>}</div>
+                <div className="order-foot">
+                  <div><small>결제금액</small><strong>{won(order.total_amount)}</strong></div>
+                  <div className="order-actions">
+                    {canAdminCancel(order.status) ? <button type="button" className="admin-cancel-button" disabled={updatingId === order.id} onClick={() => openCancelModal(order)}>주문 취소</button> : null}
+                    {nextStatus[order.status] ? <button type="button" disabled={updatingId === order.id} onClick={() => requestAdvance(order)}>{updatingId === order.id ? '처리 중...' : nextStatus[order.status]!.label}<span>→</span></button> : <span className="completed">{statusText[order.status]}</span>}
+                  </div>
+                </div>
               </article>
             )) : <div className="empty-orders"><span>☕</span><strong>{loading ? '주문을 불러오는 중이에요' : '해당 주문이 없어요'}</strong><p>{loading ? '잠시만 기다려주세요.' : '다른 상태를 선택해보세요.'}</p></div>}
           </div>
         </section>
       </main>
       {alertToast ? <button className="order-alert-toast" onClick={() => setAlertToast(null)}><span>🔔</span><div><strong>{alertToast.title}</strong><p>{alertToast.body}</p></div></button> : null}
+      {cancelTarget ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!cancelProcessing) setCancelTarget(null); }}>
+          <section className="cancel-modal" role="dialog" aria-modal="true" aria-labelledby="cancel-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+            <span className="modal-kicker">ORDER CANCEL</span>
+            <h2 id="cancel-modal-title">{formatOrderNumber(cancelTarget.order_number)} 주문을 취소할까요?</h2>
+            <p>현재 제조 상태와 관계없이 앱 결제를 환불하고 주문을 취소합니다. 고객 앱에도 취소 사유와 완료 알림이 전송돼요.</p>
+            <div className="cancel-reason-presets">
+              {cancelReasonPresets.map((reason) => <button type="button" key={reason} disabled={cancelProcessing} className={cancelReason === reason ? 'selected' : ''} onClick={() => setCancelReason(reason)}>{reason}</button>)}
+            </div>
+            <label>
+              고객에게 보여줄 취소 사유
+              <textarea value={cancelReason} disabled={cancelProcessing} onChange={(event) => setCancelReason(event.target.value)} placeholder="취소 사유를 선택하거나 직접 입력해주세요." maxLength={100} autoFocus />
+            </label>
+            <small>{cancelReason.length}/100자</small>
+            {cancelProcessing ? <div className="cancel-progress" role="status"><span className="cancel-spinner" aria-hidden="true" /><div><strong>결제 취소 처리 중</strong><p>환불 결과를 확인하고 있어요. 창을 닫거나 버튼을 다시 누르지 마세요.</p></div></div> : null}
+            {cancelError ? <div className="modal-error" role="alert"><strong>{cancelError.title}</strong><p>{cancelError.message}</p></div> : null}
+            <div className="modal-actions">
+              <button type="button" className="modal-secondary" disabled={cancelProcessing} onClick={() => setCancelTarget(null)}>돌아가기</button>
+              <button type="button" className="modal-danger" disabled={cancelProcessing} onClick={() => void cancelOrder()}>{cancelProcessing ? <><span className="button-spinner" aria-hidden="true" />취소 처리 중...</> : '주문 및 결제 취소'}</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -298,11 +486,11 @@ function AdminLogin() {
     setSubmitting(false);
   };
 
-  return <main className="login-page"><form className="login-card" onSubmit={submit}><div className="login-brand">🐾</div><p>HIMNAEGAE CAFE</p><h1>관리자 로그인</h1><span>고객 앱에서 가입한 계정으로 로그인하세요.<br />최초 로그인 계정이 매장 관리자로 등록돼요.</span><label>이메일<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>비밀번호<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>{message ? <div className="login-error">{message}</div> : null}<button disabled={submitting}>{submitting ? '확인 중...' : '관리자 페이지 들어가기'}</button></form></main>;
+  return <main className="login-page"><form className="login-card" onSubmit={submit}><div className="login-brand">🐾</div><p>HIMNAEGAE CAFE</p><h1>관리자 로그인</h1><span>등록된 관리자 계정으로 로그인해주세요.<br />일반 회원 계정은 관리자 페이지에 들어갈 수 없어요.</span><label>이메일<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>비밀번호<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>{message ? <div className="login-error">{message}</div> : null}<button disabled={submitting}>{submitting ? '확인 중...' : '관리자 페이지 들어가기'}</button></form></main>;
 }
 
 function AccessDenied({ email }: { email: string }) {
-  return <main className="login-page"><div className="login-card denied"><div className="login-brand">🔒</div><h1>관리자 권한이 없어요</h1><span>{email}<br />최초 관리자에게 계정 등록을 요청해주세요.</span><button onClick={() => void supabase.auth.signOut()}>다른 계정으로 로그인</button></div></main>;
+  return <main className="login-page"><div className="login-card denied"><div className="login-brand">🔒</div><h1>관리자 권한이 없어요</h1><span>{email}<br />매장 관리자에게 계정 등록을 요청해주세요.</span><button onClick={() => void supabase.auth.signOut()}>다른 계정으로 로그인</button></div></main>;
 }
 
 function MessageScreen({ title, description }: { title: string; description: string }) {

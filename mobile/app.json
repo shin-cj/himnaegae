@@ -2,6 +2,7 @@
   "expo": {
     "name": "힘내개",
     "slug": "himnaegae",
+    "scheme": "himnaegae",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -33,6 +34,12 @@
           "defaultChannel": "orders"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "546c3da5-11d6-46cd-9735-43b2acafde3a"
+      }
+    },
+    "owner": "shinjaehyeong"
   }
 }

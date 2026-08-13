@@ -48,20 +48,24 @@ const statusIcons: Record<string, ImageSourcePropType> = {
 };
 
 type Props = {
+  initialOrderId: string | null;
+  onInitialOrderHandled: () => void;
   onClose: () => void;
   onUnreadChange: (count: number) => void;
 };
 
-export function NotificationCenterScreen({ onClose, onUnreadChange }: Props) {
+export function NotificationCenterScreen({ initialOrderId, onInitialOrderHandled, onClose, onUnreadChange }: Props) {
   const { user } = useAuth();
   const [notices, setNotices] = useState<Notice[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedNoticeId, setExpandedNoticeId] = useState<number | null>(null);
 
   const loadNotices = useCallback(async () => {
     if (!user) {
       setNotices([]);
+      setLoadedUserId(null);
       setLoading(false);
       onUnreadChange(0);
       return;
@@ -74,6 +78,7 @@ export function NotificationCenterScreen({ onClose, onUnreadChange }: Props) {
       .limit(50);
     const nextNotices = (data ?? []) as unknown as Notice[];
     setNotices(nextNotices);
+    setLoadedUserId(user.id);
     onUnreadChange(nextNotices.filter((notice) => !notice.read_at).length);
     setLoading(false);
   }, [onUnreadChange, user]);
@@ -93,21 +98,32 @@ export function NotificationCenterScreen({ onClose, onUnreadChange }: Props) {
     setRefreshing(false);
   };
 
-  const openNotice = async (notice: Notice) => {
-    setExpandedNoticeId((current) => current === notice.id ? null : notice.id);
+  const openNotice = useCallback(async (notice: Notice, forceOpen = false) => {
+    setExpandedNoticeId((current) => forceOpen ? notice.id : current === notice.id ? null : notice.id);
     if (notice.read_at) return;
     const readAt = new Date().toISOString();
     setNotices((current) => current.map((item) => item.id === notice.id ? { ...item, read_at: readAt } : item));
     onUnreadChange(Math.max(0, notices.filter((item) => !item.read_at).length - 1));
-    await supabase.from('order_notifications').update({ read_at: readAt }).eq('id', notice.id);
-  };
+    const { error } = await supabase.rpc('mark_order_notification_read', {
+      p_notification_id: notice.id,
+    });
+    if (error) await loadNotices();
+  }, [loadNotices, notices, onUnreadChange]);
+
+  useEffect(() => {
+    if (!initialOrderId || loading || !user || loadedUserId !== user.id) return;
+    const targetNotice = notices.find((notice) => notice.order_id === initialOrderId);
+    if (targetNotice) void openNotice(targetNotice, true);
+    onInitialOrderHandled();
+  }, [initialOrderId, loadedUserId, loading, notices, onInitialOrderHandled, openNotice, user]);
 
   const markAllRead = async () => {
     if (!user) return;
     const readAt = new Date().toISOString();
     setNotices((current) => current.map((notice) => ({ ...notice, read_at: notice.read_at ?? readAt })));
     onUnreadChange(0);
-    await supabase.from('order_notifications').update({ read_at: readAt }).eq('user_id', user.id).is('read_at', null);
+    const { error } = await supabase.rpc('mark_all_order_notifications_read');
+    if (error) await loadNotices();
   };
 
   const unreadCount = notices.filter((notice) => !notice.read_at).length;

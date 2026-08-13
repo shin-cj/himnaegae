@@ -44,3 +44,139 @@ nav { display:grid; gap:7px; } nav a,nav button { min-height:47px; display:flex;
 @media (max-width:1050px) { .member-list-head { display:none; }.member-row { grid-template-columns:minmax(180px,1fr) repeat(3,auto); row-gap:9px; }.member-row > span:nth-of-type(1),.member-row > span:nth-of-type(2) { display:none; }.member-status,.member-manage { justify-self:end; } }
 @media (max-width:820px) { .member-stats { grid-template-columns:repeat(3,1fr); }.members-tools { align-items:stretch; flex-direction:column; }.members-tools .menu-search { flex-basis:40px; }.member-row { grid-template-columns:1fr auto; }.member-row > strong { display:none; } }
 @media (max-width:620px) { .operation-summary { grid-template-columns:1fr; }.status-options { grid-template-columns:1fr; }.pickup-presets .recommend-pickup { margin-left:0; }.settings-save button { width:100%; } }
+.order-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.order-card .order-foot button.admin-cancel-button {
+  border: 1px solid #efc8ba;
+  background: #fff4ef;
+  color: #bd4e2b;
+}
+
+.order-card .order-foot button.admin-cancel-button:hover {
+  background: #ffe9df;
+}
+
+.cancel-reason-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.cancel-reason-presets button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.cancel-reason-presets button.selected {
+  border-color: var(--orange);
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+
+.cancel-reason-presets button:disabled,
+.cancel-modal textarea:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.cancel-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff7e8;
+  color: #7b5a2c;
+}
+
+.cancel-progress strong,
+.modal-error strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.cancel-progress p,
+.modal-error p {
+  margin: 3px 0 0;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.cancel-spinner,
+.button-spinner {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(217, 87, 59, .25);
+  border-top-color: #d9573b;
+  border-radius: 50%;
+  animation: cancel-spin .7s linear infinite;
+}
+
+.button-spinner {
+  width: 13px;
+  height: 13px;
+  margin-right: 7px;
+  border-color: rgba(255, 255, 255, .35);
+  border-top-color: #fff;
+}
+
+.modal-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff0ea;
+  color: #bd4e2b;
+}
+
+@keyframes cancel-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cancel-spinner,
+  .button-spinner { animation: none; }
+}
+
+@media (max-width: 460px) {
+  .order-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .order-actions button {
+    justify-content: center;
+  }
+}
+
+.member-status.withdrawn {
+  background: #f0eeec;
+  color: #81756e;
+}
+
+.member-withdrawn {
+  justify-self: start;
+  color: #9b8f88;
+  font-size: 9px;
+  font-weight: 800;
+}

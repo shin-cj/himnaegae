@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
@@ -24,6 +24,18 @@ const statusLabel: Record<OrderStatus, string> = {
 const progressSteps = ['접수 됨', '제조 중', '픽업 준비 완료', '픽업 완료'] as const;
 type OrderFilter = 'active' | 'completed' | 'cancelled';
 
+type CancelFailurePayload = {
+  error?: string;
+  failureType?: 'duplicate' | 'configuration' | 'status' | 'toss' | 'rollback';
+  orderStateRestored?: boolean;
+};
+
+type CancelFailure = {
+  orderId: string;
+  title: string;
+  message: string;
+};
+
 const filterLabels: { key: OrderFilter; label: string }[] = [
   { key: 'active', label: '진행 중' },
   { key: 'completed', label: '완료' },
@@ -43,12 +55,14 @@ const progressIndex: Record<OrderStatus, number> = {
 
 export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void; refreshToken: number }) {
   const insets = useSafeAreaInsets();
-  const { loading: authLoading, user } = useAuth();
+  const { loading: authLoading, session, user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cancelFailure, setCancelFailure] = useState<CancelFailure | null>(null);
   const [filter, setFilter] = useState<OrderFilter>('active');
+  const cancellationInFlightRef = useRef(new Set<string>());
 
   const loadOrders = useCallback(async () => {
     if (!user) return;
@@ -80,24 +94,93 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
           style: 'destructive',
           onPress: () => {
             void (async () => {
+              if (cancellationInFlightRef.current.has(order.id)) return;
+
+              if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                setCancelFailure({
+                  orderId: order.id,
+                  title: '인터넷 연결을 확인해주세요',
+                  message: '취소 요청을 보내지 않았어요. 주문 상태는 그대로 유지됩니다.',
+                });
+                return;
+              }
+
+              cancellationInFlightRef.current.add(order.id);
               setCancellingId(order.id);
               setError(null);
-              const { error: cancelError } = await supabase.functions.invoke('cancel-payment', {
-                body: { orderId: order.id, cancelReason: '고객 앱에서 직접 주문 취소' },
-              });
-              if (cancelError) {
-                setError('주문을 취소하지 못했어요. 이미 제조가 시작됐거나 결제 취소 처리 중일 수 있어요. 새로고침 후 확인해주세요.');
-              } else {
+              setCancelFailure(null);
+              const abortController = new AbortController();
+              const requestTimeoutId = setTimeout(() => abortController.abort(), 20_000);
+
+              try {
+                if (!session) {
+                  setCancelFailure({ orderId: order.id, title: '로그인이 필요해요', message: '다시 로그인한 뒤 주문 취소를 진행해주세요.' });
+                  return;
+                }
+
+                const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+                if (refreshError || !refreshedData.session) {
+                  setCancelFailure({ orderId: order.id, title: '로그인 시간이 만료됐어요', message: '다시 로그인한 뒤 주문 취소를 진행해주세요.' });
+                  return;
+                }
+
+                const { data: cancelData, error: cancelError } = await supabase.functions.invoke('cancel-payment', {
+                  headers: { Authorization: `Bearer ${refreshedData.session.access_token}` },
+                  signal: abortController.signal,
+                  body: { orderId: order.id, cancelReason: '고객 앱에서 직접 주문 취소' },
+                });
+
+                if (cancelError) {
+                  const context = (cancelError as { context?: Response }).context;
+                  const payload = context
+                    ? await context.clone().json().catch(() => null) as CancelFailurePayload | null
+                    : null;
+                  const networkFailure = (typeof navigator !== 'undefined' && navigator.onLine === false)
+                    || /network|fetch|connection|인터넷|abort/i.test(cancelError.message);
+                  setCancelFailure(networkFailure && !payload
+                    ? {
+                        orderId: order.id,
+                        title: '연결 상태를 확인해주세요',
+                        message: '요청 시간이 초과됐거나 인터넷 연결이 끊겼어요. 주문 상태를 새로고침해주세요.',
+                      }
+                    : cancellationFailureForOrder(order.id, payload, cancelError.message));
+                  return;
+                }
+
+                if (!cancelData?.ok) {
+                  setCancelFailure({
+                    orderId: order.id,
+                    title: '취소 결과를 확인하지 못했어요',
+                    message: '주문 상태를 새로고침해 먼저 확인해주세요. 확인 전에는 취소 버튼을 다시 누르지 마세요.',
+                  });
+                  return;
+                }
+
                 await loadOrders();
                 Alert.alert('주문 취소 완료', order.payment_status === 'paid' ? '결제 취소와 환불이 완료됐어요.' : '주문이 취소됐어요.');
+              } catch (cancelRequestError) {
+                const detail = cancelRequestError instanceof Error ? cancelRequestError.message : '알 수 없는 오류';
+                const networkFailure = (typeof navigator !== 'undefined' && navigator.onLine === false)
+                  || /network|fetch|connection|인터넷|abort/i.test(detail);
+                setCancelFailure(networkFailure
+                  ? {
+                      orderId: order.id,
+                      title: '인터넷 연결이 끊겼어요',
+                      message: '요청 결과를 확인할 수 없어요. 연결 후 주문 상태를 새로고침해주세요.',
+                    }
+                  : { orderId: order.id, title: '주문 취소 중 오류가 발생했어요', message: detail });
+              } finally {
+                clearTimeout(requestTimeoutId);
+                cancellationInFlightRef.current.delete(order.id);
+                setCancellingId(null);
+                await loadOrders();
               }
-              setCancellingId(null);
             })();
           },
         },
       ],
     );
-  }, [loadOrders]);
+  }, [loadOrders, session]);
 
   const groupedOrders = useMemo(() => ({
     active: orders.filter((order) => order.status !== 'picked_up' && order.status !== 'cancelled'),
@@ -154,7 +237,9 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
             key={order.id}
             order={order}
             cancelling={cancellingId === order.id}
+            failure={cancelFailure?.orderId === order.id ? cancelFailure : null}
             onCancel={() => requestCancellation(order)}
+            onRefresh={() => { setCancelFailure(null); void loadOrders(); }}
           />
         ))}
       </ScrollView>
@@ -162,7 +247,7 @@ export function OrdersScreen({ onOpenMy, refreshToken }: { onOpenMy: () => void;
   );
 }
 
-function OrderCard({ order, cancelling, onCancel }: { order: Order; cancelling: boolean; onCancel: () => void }) {
+function OrderCard({ order, cancelling, failure, onCancel, onRefresh }: { order: Order; cancelling: boolean; failure: CancelFailure | null; onCancel: () => void; onRefresh: () => void }) {
   const date = new Date(order.created_at).toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   const isCancelled = order.status === 'cancelled' || order.status === 'cancel_requested';
   const isCompleted = order.status === 'picked_up';
@@ -212,15 +297,49 @@ function OrderCard({ order, cancelling, onCancel }: { order: Order; cancelling: 
             onPress={onCancel}
             style={({ pressed }) => [styles.cancelButton, pressed && canCancel && styles.cancelButtonPressed, (!canCancel || cancelling) && styles.cancelButtonDisabled]}
           >
+            {cancelling ? <ActivityIndicator size="small" color={colors.orange} style={styles.cancelButtonSpinner} /> : null}
             <Text style={[styles.cancelButtonText, !canCancel && styles.cancelButtonTextDisabled]}>
-              {cancelling ? '요청 중...' : canCancel ? '주문 취소' : '취소 불가'}
+              {cancelling ? '취소 처리 중...' : canCancel ? '주문 취소' : '취소 불가'}
             </Text>
           </Pressable>
           <Text style={styles.actionHint}>{cancelHint}</Text>
         </View>
       ) : null}
+      {cancelling ? (
+        <View style={styles.cancelProgressBox}>
+          <Text style={styles.cancelProgressTitle}>결제 취소 처리 중</Text>
+          <Text style={styles.cancelProgressText}>환불 결과를 확인하고 있어요. 버튼을 다시 누르지 마세요.</Text>
+        </View>
+      ) : null}
+      {failure ? (
+        <View style={styles.cancelFailureBox}>
+          <Text style={styles.cancelFailureTitle}>{failure.title}</Text>
+          <Text style={styles.cancelFailureText}>{failure.message}</Text>
+          <Pressable onPress={onRefresh} style={styles.cancelRefreshButton}><Text style={styles.cancelRefreshText}>주문 상태 새로고침</Text></Pressable>
+        </View>
+      ) : null}
     </View>
   );
+}
+
+function cancellationFailureForOrder(orderId: string, payload: CancelFailurePayload | null, fallback: string): CancelFailure {
+  if (payload?.failureType === 'toss') {
+    return {
+      orderId,
+      title: '결제 환불에 실패했어요',
+      message: `${payload.error ?? fallback} 주문은 취소 전 상태로 안전하게 되돌렸어요.`,
+    };
+  }
+  if (payload?.failureType === 'duplicate') {
+    return { orderId, title: '이미 취소 처리 중이에요', message: payload.error ?? '잠시 후 주문 상태를 확인해주세요.' };
+  }
+  if (payload?.failureType === 'rollback') {
+    return { orderId, title: '주문 상태를 확인해주세요', message: payload.error ?? '환불 결과와 주문 상태를 확인하지 못했어요.' };
+  }
+  if (payload?.failureType === 'status') {
+    return { orderId, title: '주문 상태가 변경됐어요', message: payload.error ?? '새로고침 후 현재 상태를 확인해주세요.' };
+  }
+  return { orderId, title: '주문을 취소하지 못했어요', message: payload?.error ?? fallback };
 }
 
 function formatPickupTime(value: string) {
@@ -323,10 +442,19 @@ const styles = StyleSheet.create({
   totalLabel: { color: colors.muted, fontSize: 13, fontWeight: '700' },
   total: { color: colors.dark, fontSize: 17, fontWeight: '900' },
   actionRow: { marginTop: 15, flexDirection: 'row', alignItems: 'center' },
-  cancelButton: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 11, borderWidth: 1, borderColor: '#E6DCD3' },
+  cancelButton: { minHeight: 38, paddingHorizontal: 13, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: '#E6DCD3' },
+  cancelButtonSpinner: { marginRight: 7 },
   cancelButtonPressed: { backgroundColor: '#F7F0EA' },
   cancelButtonDisabled: { opacity: 0.55 },
   cancelButtonText: { color: colors.muted, fontSize: 12, fontWeight: '800' },
   cancelButtonTextDisabled: { color: '#A99D94' },
   actionHint: { flex: 1, marginLeft: 10, color: '#AA9B91', fontSize: 10, textAlign: 'right' },
+  cancelProgressBox: { marginTop: 12, padding: 13, borderRadius: 14, backgroundColor: '#FFF6E6' },
+  cancelProgressTitle: { color: '#7B5A2C', fontSize: 13, fontWeight: '900' },
+  cancelProgressText: { marginTop: 4, color: '#94754A', fontSize: 11, lineHeight: 17 },
+  cancelFailureBox: { marginTop: 12, padding: 14, borderRadius: 14, backgroundColor: '#FFF0EB' },
+  cancelFailureTitle: { color: '#B84F32', fontSize: 13, fontWeight: '900' },
+  cancelFailureText: { marginTop: 5, color: '#8E5F50', fontSize: 11, lineHeight: 18 },
+  cancelRefreshButton: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#FFFFFF' },
+  cancelRefreshText: { color: colors.orange, fontSize: 11, fontWeight: '900' },
 });

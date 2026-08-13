@@ -14,9 +14,10 @@ import { MenuScreen } from './src/screens/MenuScreen';
 import { NotificationCenterScreen } from './src/screens/NotificationCenterScreen';
 import { MyScreen } from './src/screens/MyScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
+import { PasswordRecoveryScreen } from './src/screens/PasswordRecoveryScreen';
 import { TossPaymentScreen, type TossPaymentSession } from './src/screens/TossPaymentScreen';
 import { supabase } from './src/lib/supabase';
-import { addNotificationTapListener, showOrderStatusNotification, usesExpoGo } from './src/lib/notifications';
+import { addNotificationTapListener, getNotificationPermission, registerForOrderNotifications, showOrderStatusNotification, usesExpoGo } from './src/lib/notifications';
 import { formatOrderNumber } from './src/lib/order-number';
 import type { CartItem, Menu, MenuSelection } from './src/types/menu';
 import type { StoreSettings } from './src/types/store';
@@ -52,7 +53,7 @@ export default function App() {
 }
 
 function AppContent() {
-  const { user } = useAuth();
+  const { passwordRecovery, user } = useAuth();
   const pagerRef = useRef<PagerView>(null);
   const [activeTab, setActiveTab] = useState<AppTab>('home');
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -64,6 +65,7 @@ function AppContent() {
   const [customPickupTime, setCustomPickupTime] = useState(defaultCustomPickupTime);
   const [paymentSession, setPaymentSession] = useState<TossPaymentSession | null>(null);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
+  const [notificationOrderId, setNotificationOrderId] = useState<string | null>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [ordersRefreshToken, setOrdersRefreshToken] = useState(0);
   const [catalogMenus, setCatalogMenus] = useState<Menu[]>(fallbackMenus);
@@ -177,9 +179,19 @@ function AppContent() {
   };
 
   useEffect(() => {
-    const subscription = addNotificationTapListener(() => setNotificationsVisible(true));
+    const subscription = addNotificationTapListener(({ orderId }) => {
+      setNotificationOrderId(orderId);
+      setNotificationsVisible(true);
+    });
     return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    if (!user || usesExpoGo()) return;
+    void getNotificationPermission().then((enabled) => {
+      if (enabled) void registerForOrderNotifications(user.id);
+    });
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -188,10 +200,10 @@ function AppContent() {
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'orders', filter: `user_id=eq.${user.id}`,
       }, (payload) => {
-        const changedOrder = payload.new as { order_number?: string; status?: string };
+        const changedOrder = payload.new as { id?: string; order_number?: string; status?: string };
         setOrdersRefreshToken((current) => current + 1);
-        if (changedOrder.status && changedOrder.status !== 'cancel_requested' && changedOrder.order_number && usesExpoGo()) {
-          void showOrderStatusNotification(changedOrder.order_number, changedOrder.status);
+        if (changedOrder.id && changedOrder.status && changedOrder.status !== 'cancel_requested' && changedOrder.order_number && usesExpoGo()) {
+          void showOrderStatusNotification(changedOrder.id, changedOrder.order_number, changedOrder.status);
         }
       })
       .subscribe();
@@ -239,7 +251,7 @@ function AppContent() {
             if (!tossClientKey) throw new Error('토스 클라이언트 키가 없어요.');
             const pickupAt = resolvePickupTime(pickupDelay, customPickupTime);
             const { data, error } = await supabase.functions.invoke('toss-payment', {
-              body: { clientKey: tossClientKey, pickup_at: pickupAt.toISOString(), pickup_type: pickupDelay === 0 ? 'asap' : 'scheduled', items: cart.map((item) => ({
+              body: { pickup_at: pickupAt.toISOString(), pickup_type: pickupDelay === 0 ? 'asap' : 'scheduled', items: cart.map((item) => ({
                 menu_id: item.menuId,
                 menu_name: item.menuName,
                 temperature: item.temperature,
@@ -310,6 +322,9 @@ function AppContent() {
 
   return (
     <View style={styles.app}>
+      <Modal visible={passwordRecovery} animationType="slide" presentationStyle="fullScreen">
+        <PasswordRecoveryScreen />
+      </Modal>
           <StatusBar style="dark" />
           <PagerView
             ref={pagerRef}
@@ -376,8 +391,13 @@ function AppContent() {
               onCustomPickupTimeChange={setCustomPickupTime}
             />
           </Modal>
-          <Modal visible={notificationsVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setNotificationsVisible(false)}>
-            <NotificationCenterScreen onClose={() => setNotificationsVisible(false)} onUnreadChange={setUnreadNotifications} />
+          <Modal visible={notificationsVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => { setNotificationsVisible(false); setNotificationOrderId(null); }}>
+            <NotificationCenterScreen
+              initialOrderId={notificationOrderId}
+              onInitialOrderHandled={() => setNotificationOrderId(null)}
+              onClose={() => { setNotificationsVisible(false); setNotificationOrderId(null); }}
+              onUnreadChange={setUnreadNotifications}
+            />
           </Modal>
           <Modal visible={paymentSession !== null} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => closePayment()}>
             {paymentSession ? (

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
 import { getNotificationPermission, registerForOrderNotifications } from '../lib/notifications';
 import { colors } from '../theme/colors';
+import { AccountSettingsScreen } from './AccountSettingsScreen';
 import { AuthScreen } from './AuthScreen';
 
 export function MyScreen() {
@@ -13,6 +14,7 @@ export function MyScreen() {
   const [notificationEnabled, setNotificationEnabled] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('음료가 준비되면 바로 알려드려요.');
   const [enablingNotification, setEnablingNotification] = useState(false);
+  const [accountSettingsVisible, setAccountSettingsVisible] = useState(false);
 
   useEffect(() => {
     void getNotificationPermission().then(setNotificationEnabled).catch(() => setNotificationEnabled(false));
@@ -67,9 +69,19 @@ export function MyScreen() {
         </Pressable>
       </View>
       <Text style={styles.guide}>알림을 허용하면 주문 페이지를 보고 있지 않아도 픽업 준비 소식을 받을 수 있어요.</Text>
+      <Pressable onPress={() => setAccountSettingsVisible(true)} style={({ pressed }) => [styles.accountButton, pressed && styles.pressed]}>
+        <View>
+          <Text style={styles.accountButtonTitle}>계정 및 보안</Text>
+          <Text style={styles.accountButtonDescription}>닉네임·비밀번호·로그인 기기·회원 탈퇴</Text>
+        </View>
+        <Text style={styles.accountChevron}>›</Text>
+      </Pressable>
       <Pressable onPress={handleSignOut} style={({ pressed }) => [styles.logoutButton, pressed && styles.pressed]}>
         <Text style={styles.logoutText}>로그아웃</Text>
       </Pressable>
+      <Modal visible={accountSettingsVisible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setAccountSettingsVisible(false)}>
+        <AccountSettingsScreen onClose={() => setAccountSettingsVisible(false)} />
+      </Modal>
     </View>
   );
 }
@@ -92,6 +104,10 @@ const styles = StyleSheet.create({
   notificationButtonText: { color: colors.white, fontSize: 12, fontWeight: '900' },
   notificationButtonTextEnabled: { color: '#3E7E4B' },
   guide: { marginTop: 18, color: colors.muted, fontSize: 14, lineHeight: 21 },
+  accountButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 24, padding: 18, borderRadius: 18, backgroundColor: colors.white },
+  accountButtonTitle: { color: colors.dark, fontSize: 16, fontWeight: '900' },
+  accountButtonDescription: { marginTop: 5, color: colors.muted, fontSize: 12 },
+  accountChevron: { color: '#B9AAA0', fontSize: 29 },
   logoutButton: { alignItems: 'center', marginTop: 28, paddingVertical: 15, borderWidth: 1, borderColor: '#E5D5C8', borderRadius: 16, backgroundColor: colors.white },
   logoutText: { color: colors.orange, fontSize: 15, fontWeight: '900' },
   pressed: { opacity: 0.6 },
