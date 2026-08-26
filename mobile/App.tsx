@@ -64,6 +64,7 @@ function AppContent() {
   const [pickupDelay, setPickupDelay] = useState<PickupChoice>(0);
   const [customPickupTime, setCustomPickupTime] = useState(defaultCustomPickupTime);
   const [paymentSession, setPaymentSession] = useState<TossPaymentSession | null>(null);
+  const abandoningPaymentRef = useRef(new Set<string>());
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [notificationOrderId, setNotificationOrderId] = useState<string | null>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
@@ -212,6 +213,17 @@ function AppContent() {
   }, [user]);
 
   useEffect(() => {
+    if (!user) return;
+    void supabase.functions.invoke('toss-payment', {
+      body: { action: 'cleanup-pending' },
+    }).then(({ data }) => {
+      if (Number(data?.cancelledCount ?? 0) > 0) {
+        setOrdersRefreshToken((current) => current + 1);
+      }
+    });
+  }, [user]);
+
+  useEffect(() => {
     if (!user) { setUnreadNotifications(0); return; }
     const loadUnread = async () => {
       const { count } = await supabase
@@ -314,9 +326,27 @@ function AppContent() {
     }
   };
 
+  const abandonPendingPayment = async (target: TossPaymentSession) => {
+    if (abandoningPaymentRef.current.has(target.orderId)) return;
+    abandoningPaymentRef.current.add(target.orderId);
+    try {
+      const { data: refreshedData } = await supabase.auth.refreshSession();
+      if (!refreshedData.session) return;
+      await supabase.functions.invoke('toss-payment', {
+        headers: { Authorization: `Bearer ${refreshedData.session.access_token}` },
+        body: { action: 'abandon', orderId: target.orderId },
+      });
+      setOrdersRefreshToken((current) => current + 1);
+    } finally {
+      abandoningPaymentRef.current.delete(target.orderId);
+    }
+  };
+
   const closePayment = (message?: string) => {
+    const abandonedSession = paymentSession;
     setPaymentSession(null);
     setTimeout(() => setCartVisible(true), 450);
+    if (abandonedSession) void abandonPendingPayment(abandonedSession);
     if (message) Alert.alert('결제가 완료되지 않았어요', message);
   };
 

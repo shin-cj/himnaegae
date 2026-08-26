@@ -1,5 +1,4 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
-import { createSupabaseContext } from 'npm:@supabase/server@^1';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const cors = {
@@ -23,9 +22,6 @@ export default {
     if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
     try {
-      const { data: context, error: contextError } = await createSupabaseContext(request, { auth: 'user' });
-      if (contextError || !context.userClaims?.sub) return json({ error: 'Unauthorized' }, 401);
-
       const supabaseUrl = Deno.env.get('SUPABASE_URL');
       const secretKeysRaw = Deno.env.get('SUPABASE_SECRET_KEYS');
       const secretKeys = secretKeysRaw ? JSON.parse(secretKeysRaw) as Record<string, string> : {};
@@ -33,11 +29,17 @@ export default {
       if (!supabaseUrl || !serviceRoleKey) return json({ error: 'Server configuration is missing' }, 500);
 
       const admin = createClient(supabaseUrl, serviceRoleKey);
+      const authHeader = request.headers.get('Authorization') ?? '';
+      const accessToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+      if (!accessToken) return json({ error: 'Unauthorized' }, 401);
+      const { data: authData, error: authError } = await admin.auth.getUser(accessToken);
+      const requesterId = authData.user?.id;
+      if (authError || !requesterId) return json({ error: 'Unauthorized' }, 401);
 
       const { data: adminUser } = await admin
         .from('admin_users')
         .select('user_id')
-        .eq('user_id', context.userClaims.sub)
+        .eq('user_id', requesterId)
         .maybeSingle();
       if (!adminUser) return json({ error: 'Admin access required' }, 403);
 
@@ -106,14 +108,12 @@ export default {
         .select('id')
         .maybeSingle();
       if (historyError) throw historyError;
-      if (!savedNotification) return json({ ok: true, sent: 0, duplicate: true });
-
       const { data: tokens, error: tokenError } = await admin
         .from('push_tokens')
         .select('expo_push_token')
         .eq('user_id', order.user_id);
       if (tokenError) throw tokenError;
-      if (!tokens?.length) return json({ ok: true, sent: 0, historySaved: true });
+      if (!tokens?.length) return json({ ok: true, sent: 0, historySaved: Boolean(savedNotification), duplicate: !savedNotification });
 
       const pushResponse = await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',

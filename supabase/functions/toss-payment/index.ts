@@ -28,6 +28,47 @@ export default {
 
       const body = await req.json();
 
+      if (body.action === 'abandon') {
+        const orderId = String(body.orderId ?? '');
+        if (!orderId) return json({ error: '정리할 주문 번호가 필요해요.' }, 400);
+
+        const { data: cancelledOrder, error: cancelError } = await admin
+          .from('orders')
+          .update({
+            status: 'cancelled',
+            payment_status: 'cancelled',
+            cancellation_reason: '결제가 완료되지 않아 자동 취소',
+            cancelled_at: new Date().toISOString(),
+          })
+          .eq('id', orderId)
+          .eq('user_id', authData.user.id)
+          .eq('status', 'payment_pending')
+          .in('payment_status', ['pending', 'failed'])
+          .select('id')
+          .maybeSingle();
+        if (cancelError) throw cancelError;
+        return json({ ok: true, cancelled: Boolean(cancelledOrder) });
+      }
+
+      if (body.action === 'cleanup-pending') {
+        const expiresBefore = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+        const { data: cancelledOrders, error: cleanupError } = await admin
+          .from('orders')
+          .update({
+            status: 'cancelled',
+            payment_status: 'cancelled',
+            cancellation_reason: '결제 시간이 지나 자동 취소',
+            cancelled_at: new Date().toISOString(),
+          })
+          .eq('user_id', authData.user.id)
+          .eq('status', 'payment_pending')
+          .in('payment_status', ['pending', 'failed'])
+          .lt('created_at', expiresBefore)
+          .select('id');
+        if (cleanupError) throw cleanupError;
+        return json({ ok: true, cancelledCount: cancelledOrders?.length ?? 0 });
+      }
+
       if (body.action === 'confirm') {
         const paymentKey = String(body.paymentKey ?? '');
         const orderId = String(body.orderId ?? '');
