@@ -74,10 +74,12 @@ export async function registerForOrderNotifications(_userId: string): Promise<No
     : permission.status === 'granted';
 
   if (!permissionGranted) {
-    return { enabled: false, pushRegistered: false, message: '아이폰 설정에서 힘내개 알림을 허용해주세요.' };
+    return { enabled: false, pushRegistered: false, message: '휴대폰 설정에서 힘내개 알림을 허용해주세요.' };
   }
 
-  if (!Device.isDevice) {
+  // Google Play 서비스가 포함된 Android 에뮬레이터는 원격 푸시를 받을 수 있습니다.
+  // iOS 시뮬레이터 등 지원 여부를 보장할 수 없는 환경만 여기서 제외합니다.
+  if (!Device.isDevice && Platform.OS !== 'android') {
     return { enabled: true, pushRegistered: false, message: '알림은 켜졌어요. 원격 푸시는 실제 스마트폰에서 등록돼요.' };
   }
 
@@ -97,8 +99,9 @@ export async function registerForOrderNotifications(_userId: string): Promise<No
     await AsyncStorage.setItem(registeredPushTokenStorageKey, expoPushToken);
 
     return { enabled: true, pushRegistered: true, message: '픽업 준비 알림을 잠금화면에서도 받을 수 있어요.' };
-  } catch {
-    return { enabled: true, pushRegistered: false, message: '앱 안 알림은 켜졌어요. 개발 빌드 설치 후 잠금화면 알림도 켜져요.' };
+  } catch (error) {
+    console.warn('주문 푸시 토큰 등록 실패', error);
+    return { enabled: true, pushRegistered: false, message: '푸시 알림 등록에 실패했어요. 네트워크와 알림 설정을 확인해주세요.' };
   }
 }
 
