@@ -1,12 +1,14 @@
 import { type ComponentProps, useState } from 'react';
 import {
-  Alert, KeyboardAvoidingView, Platform, Pressable , ScrollView,
+  Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
   StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
+import { getPasswordValidationError } from '../lib/password';
 import { colors } from '../theme/colors';
+import { PrivacyPolicyScreen } from './PrivacyPolicyScreen';
 
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
@@ -17,6 +19,8 @@ export function AuthScreen() {
   const [password, setPassword] = useState('');
   const [passwordCheck, setPasswordCheck] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [privacyAgreed, setPrivacyAgreed] = useState(false);
+  const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
   const isSignup = mode === 'signup';
   const isForgot = mode === 'forgot';
 
@@ -29,12 +33,17 @@ export function AuthScreen() {
       Alert.alert('이메일 확인', '사용할 이메일을 정확히 입력해주세요.');
       return;
     }
-    if (!isForgot && password.length < 8) {
-      Alert.alert('비밀번호 확인', '비밀번호를 8글자 이상 입력해주세요.');
+    const passwordError = !isForgot ? getPasswordValidationError(password) : null;
+    if (passwordError) {
+      Alert.alert('비밀번호 확인', passwordError);
       return;
     }
     if (isSignup && password !== passwordCheck) {
       Alert.alert('비밀번호 확인', '두 비밀번호가 서로 달라요.');
+      return;
+    }
+    if (isSignup && !privacyAgreed) {
+      Alert.alert('개인정보 처리방침 확인', '회원가입을 위해 개인정보 처리방침을 확인하고 동의해주세요.');
       return;
     }
 
@@ -88,8 +97,18 @@ export function AuthScreen() {
 
         {isSignup ? <Field label="닉네임" value={nickname} onChangeText={setNickname} placeholder="앱에서 사용할 이름" maxLength={40} /> : null}
         <Field label="이메일" value={email} onChangeText={setEmail} placeholder="coffee@example.com" keyboardType="email-address" autoCapitalize="none" />
-        {!isForgot ? <Field label="비밀번호" value={password} onChangeText={setPassword} placeholder="8글자 이상" secureTextEntry autoCapitalize="none" /> : null}
+        {!isForgot ? <Field label="비밀번호" value={password} onChangeText={setPassword} placeholder="10글자 이상 · 영문/숫자/특수문자 중 2종류" secureTextEntry autoCapitalize="none" /> : null}
         {isSignup ? <Field label="비밀번호 확인" value={passwordCheck} onChangeText={setPasswordCheck} placeholder="한 번 더 입력해주세요" secureTextEntry autoCapitalize="none" /> : null}
+
+        {isSignup ? (
+          <View style={styles.privacyRow}>
+            <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: privacyAgreed }} onPress={() => setPrivacyAgreed((current) => !current)} style={[styles.checkbox, privacyAgreed && styles.checkboxChecked]}>
+              <Text style={styles.checkmark}>{privacyAgreed ? '✓' : ''}</Text>
+            </Pressable>
+            <Text style={styles.privacyText}>개인정보 처리방침에 동의합니다. </Text>
+            <Pressable onPress={() => setPrivacyPolicyVisible(true)}><Text style={styles.privacyLink}>내용 보기</Text></Pressable>
+          </View>
+        ) : null}
 
         <Pressable disabled={submitting} onPress={submit} style={({ pressed }) => [styles.submitButton, (pressed || submitting) && styles.buttonPressed]}>
           <Text style={styles.submitText}>{submitting ? '처리 중...' : isForgot ? '변경 링크 받기' : isSignup ? '가입하기' : '로그인'}</Text>
@@ -97,6 +116,9 @@ export function AuthScreen() {
         {!isSignup ? <Pressable disabled={submitting} onPress={() => setMode(isForgot ? 'login' : 'forgot')} style={styles.forgotButton}>
           <Text style={styles.forgotText}>{isForgot ? '로그인으로 돌아가기' : '비밀번호를 잊으셨나요?'}</Text>
         </Pressable> : null}
+        <Modal visible={privacyPolicyVisible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setPrivacyPolicyVisible(false)}>
+          <PrivacyPolicyScreen onClose={() => setPrivacyPolicyVisible(false)} />
+        </Modal>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -133,4 +155,10 @@ const styles = StyleSheet.create({
   submitText: { color: colors.white, fontSize: 16, fontWeight: '900' },
   forgotButton: { alignItems: 'center', paddingVertical: 18 },
   forgotText: { color: colors.muted, fontSize: 14, fontWeight: '800', textDecorationLine: 'underline' },
+  privacyRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  checkbox: { width: 25, height: 25, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#D9CBBF', borderRadius: 7, backgroundColor: colors.white },
+  checkboxChecked: { borderColor: colors.orange, backgroundColor: colors.orange },
+  checkmark: { color: colors.white, fontSize: 16, fontWeight: '900' },
+  privacyText: { marginLeft: 9, color: colors.muted, fontSize: 13 },
+  privacyLink: { color: colors.orange, fontSize: 13, fontWeight: '900', textDecorationLine: 'underline' },
 });

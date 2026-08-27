@@ -25,3 +25,14 @@ expo-qr.png
 
 # Supabase CLI local metadata
 supabase/.temp/
+
+# Server credentials and signing keys (public app configs are intentionally not matched)
+*service-account*.json
+*service_account*.json
+*firebase-adminsdk*.json
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.pem

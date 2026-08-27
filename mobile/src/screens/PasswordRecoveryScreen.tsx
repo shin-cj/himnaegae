@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
+import { getPasswordValidationError } from '../lib/password';
 import { colors } from '../theme/colors';
 
 export function PasswordRecoveryScreen() {
@@ -16,8 +17,9 @@ export function PasswordRecoveryScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   const updatePassword = async () => {
-    if (password.length < 8) {
-      Alert.alert('비밀번호 확인', '새 비밀번호를 8글자 이상 입력해주세요.');
+    const passwordError = getPasswordValidationError(password);
+    if (passwordError) {
+      Alert.alert('비밀번호 확인', passwordError);
       return;
     }
     if (password !== passwordCheck) {
@@ -41,11 +43,11 @@ export function PasswordRecoveryScreen() {
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingTop: insets.top + 36, paddingBottom: insets.bottom + 30 }]}>
         <Text style={styles.eyebrow}>ACCOUNT SECURITY</Text>
         <Text style={styles.title}>새 비밀번호를 입력해주세요</Text>
-        <Text style={styles.description}>이전에 사용하던 비밀번호와 다르게 8글자 이상으로 만들어주세요.</Text>
+        <Text style={styles.description}>이전에 사용하던 비밀번호와 다르게 10글자 이상으로 만들어주세요.</Text>
 
         <View style={styles.form}>
           <Text style={styles.label}>새 비밀번호</Text>
-          <TextInput value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" placeholder="8글자 이상" placeholderTextColor="#B3A69D" style={styles.input} />
+          <TextInput value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" placeholder="10글자 이상 · 문자 종류 2개 이상" placeholderTextColor="#B3A69D" style={styles.input} />
           <Text style={styles.label}>새 비밀번호 확인</Text>
           <TextInput value={passwordCheck} onChangeText={setPasswordCheck} secureTextEntry autoCapitalize="none" placeholder="한 번 더 입력해주세요" placeholderTextColor="#B3A69D" style={styles.input} />
         </View>

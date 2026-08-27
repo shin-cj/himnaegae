@@ -117,10 +117,7 @@ export async function unregisterOrderNotifications(userId: string) {
 
 export async function unregisterAllOrderNotifications(userId: string) {
   if (!userId) return;
-  const { error } = await supabase
-    .from('push_tokens')
-    .delete()
-    .eq('user_id', userId);
+  const { error } = await supabase.rpc('unregister_all_push_tokens');
   if (error) throw error;
   await AsyncStorage.removeItem(registeredPushTokenStorageKey);
 }

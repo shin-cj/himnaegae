@@ -199,8 +199,12 @@ export default {
       }
 
       const { items } = body;
+      const requestId = String(body.request_id ?? '');
       const pickupType = body.pickup_type === 'asap' ? 'asap' : 'scheduled';
       const pickupAt = new Date(body.pickup_at);
+      if (!/^[A-Za-z0-9_-]{16,100}$/.test(requestId)) {
+        return json({ error: '결제 요청 정보가 올바르지 않아요.' }, 400);
+      }
       if (!Array.isArray(items) || items.length < 1 || items.length > 30) {
         return json({ error: '결제 정보가 올바르지 않아요.' }, 400);
       }
@@ -271,15 +275,23 @@ export default {
       const total = normalizedItems.reduce((sum: number, item) => sum + item.unit_price * item.quantity, 0);
       if (!Number.isInteger(total) || total < 100) return json({ error: '결제 금액이 올바르지 않아요.' }, 400);
 
-      const { data: order, error: orderError } = await admin.from('orders').insert({
-        user_id: authData.user.id, status: 'payment_pending', payment_status: 'pending', total_amount: total,
-        pickup_at: pickupAt.toISOString(), pickup_type: pickupType,
-      }).select('id, order_number').single();
+      const { data: orderRows, error: orderError } = await admin.rpc('create_pending_payment_order', {
+        p_user_id: authData.user.id,
+        p_request_id: requestId,
+        p_total_amount: total,
+        p_pickup_at: pickupAt.toISOString(),
+        p_pickup_type: pickupType,
+      });
       if (orderError) throw orderError;
+      const orderResult = orderRows?.[0] as { order_id?: string; order_number?: string; was_created?: boolean } | undefined;
+      if (!orderResult?.order_id || !orderResult.order_number) throw new Error('결제 주문을 확인할 수 없어요.');
+      const order = { id: orderResult.order_id, order_number: orderResult.order_number };
 
-      const rows = normalizedItems.map((item) => ({ order_id: order.id, ...item }));
-      const { error: itemError } = await admin.from('order_items').insert(rows);
-      if (itemError) { await admin.from('orders').delete().eq('id', order.id); throw itemError; }
+      if (orderResult.was_created) {
+        const rows = normalizedItems.map((item) => ({ order_id: order.id, ...item }));
+        const { error: itemError } = await admin.from('order_items').insert(rows);
+        if (itemError) { await admin.from('orders').delete().eq('id', order.id); throw itemError; }
+      }
 
       const orderName = normalizedItems.length > 1 ? `${normalizedItems[0].menu_name} 외 ${normalizedItems.length - 1}건` : normalizedItems[0].menu_name;
       return json({
