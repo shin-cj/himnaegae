@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  payment-safety:
+    name: 결제·취소 안전성
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 저장소 가져오기
+        uses: actions/checkout@v7
+      - name: Deno 설정
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Edge Function 타입 검사
+        run: deno check supabase/functions/toss-payment/index.ts supabase/functions/cancel-payment/index.ts
+      - name: 결제·취소 테스트
+        run: deno test supabase/tests
+
+  admin:
+    name: 관리자 웹
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - name: 저장소 가져오기
+        uses: actions/checkout@v7
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - name: 의존성 설치
+        run: npm ci
+      - name: 린트
+        run: npm run lint
+      - name: 프로덕션 빌드
+        run: npm run build
+
+  mobile:
+    name: 모바일 앱
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: 저장소 가져오기
+        uses: actions/checkout@v7
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: 의존성 설치
+        run: npm ci
+      - name: TypeScript 검사
+        run: npx tsc --noEmit

@@ -8,10 +8,10 @@ Edge Function 소스는 모두 이 저장소의 `supabase/functions`에서 관�
 
 ```powershell
 npx -y deno check supabase/functions/toss-payment/index.ts supabase/functions/cancel-payment/index.ts
-npx -y deno test supabase/tests/payment-safety.test.ts
+npx -y deno test supabase/tests
 ```
 
-테스트는 금액 불일치, 중복 결제 확인, 중단된 처리 복구, 주문 소유권, 제조 시작 후 고객 취소 차단, 중복 취소를 검증합니다.
+테스트는 서버 주문 금액 계산, 옵션·수량 검증, 금액 불일치, 중복 결제 확인, 중단된 처리 복구, 주문 소유권, 제조 시작 후 고객 취소 차단, 중복 취소를 검증합니다. 같은 검사는 GitHub에 푸시하거나 Pull Request를 만들 때 `.github/workflows/ci.yml`에서 자동으로 실행됩니다.
 
 ## 최초 한 번
 
