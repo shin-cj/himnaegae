@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { decideCancellationAttempt } from '../_shared/payment-safety.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -15,8 +16,6 @@ const formatOrderNumber = (value: string) => {
   const match = /^A-\d{8}-(\d+)$/.exec(value);
   return match ? `A-${match[1]}` : value;
 };
-
-const customerCancellableStatuses = ['payment_pending', 'paid', 'accepted'];
 
 type OrderStatus = 'payment_pending' | 'paid' | 'accepted' | 'preparing' | 'ready' | 'picked_up' | 'cancel_requested' | 'cancelled';
 
@@ -56,32 +55,33 @@ export default {
 
       const [{ data: adminRole }, { data: order, error: orderError }] = await Promise.all([
         admin.from('admin_users').select('user_id').eq('user_id', requesterId).maybeSingle(),
-        admin.from('orders').select('id,user_id,order_number,status,payment_status,payment_key,cancellation_reason').eq('id', orderId).maybeSingle(),
+        admin.from('orders').select('id,user_id,order_number,status,payment_status,payment_key,cancellation_reason,updated_at').eq('id', orderId).maybeSingle(),
       ]);
 
       if (orderError) throw orderError;
       if (!order) return json({ error: '주문을 찾을 수 없어요.' }, 404);
       const isAdmin = Boolean(adminRole);
       const isOwner = order.user_id === requesterId;
-      if (!isAdmin && !isOwner) return json({ error: '이 주문을 취소할 권한이 없어요.' }, 403);
-
-      if (order.status === 'cancelled' || ['cancelled', 'refunded'].includes(order.payment_status)) {
+      const cancellationDecision = decideCancellationAttempt(order, requesterId, isAdmin);
+      if (cancellationDecision === 'forbidden') return json({ error: '이 주문을 취소할 권한이 없어요.' }, 403);
+      if (cancellationDecision === 'already_cancelled') {
         return json({ ok: true, alreadyCancelled: true });
       }
-
-      if (order.payment_status === 'confirming') {
+      if (cancellationDecision === 'payment_in_progress') {
         return json({
           error: '결제 확인이 진행 중이에요. 잠시 후 다시 시도해주세요.',
           code: 'PAYMENT_CONFIRM_IN_PROGRESS',
           failureType: 'duplicate',
         }, 409);
       }
-
-      const customerCanCancel = isOwner
-        && [...customerCancellableStatuses, 'cancel_requested'].includes(order.status);
-      const adminCanCancel = isAdmin && order.status !== 'cancelled';
-
-      if (!customerCanCancel && !adminCanCancel) {
+      if (cancellationDecision === 'cancel_in_progress') {
+        return json({
+          error: '주문 취소가 진행 중이에요. 잠시 후 다시 확인해주세요.',
+          code: 'CANCEL_IN_PROGRESS',
+          failureType: 'duplicate',
+        }, 409);
+      }
+      if (cancellationDecision === 'not_allowed') {
         return json({
           error: isOwner
             ? '이미 제조가 시작되어 고객이 직접 취소할 수 없어요.'
@@ -117,7 +117,8 @@ export default {
         .from('orders')
         .update({ status: 'cancel_requested', cancellation_reason: cancelReason })
         .eq('id', order.id)
-        .in('status', isAdmin ? [previousStatus] : [...customerCancellableStatuses, 'cancel_requested'])
+        .eq('status', previousStatus)
+        .eq('updated_at', order.updated_at)
         .select('id')
         .maybeSingle();
       if (claimError) throw claimError;

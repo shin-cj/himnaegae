@@ -1,5 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { withSupabase } from 'jsr:@supabase/server@^1';
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import { decidePaymentConfirmation } from '../_shared/payment-safety.ts';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type' };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
@@ -15,7 +17,8 @@ export default {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   const url = new URL(req.url);
   const action = url.searchParams.get('action');
-  const admin = ctx.supabaseAdmin;
+  // @supabase/server cannot infer this project's generated database type here.
+  const admin = ctx.supabaseAdmin as unknown as SupabaseClient<any>;
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   if (!supabaseUrl) return json({ error: 'Supabase 주소를 확인할 수 없어요.' }, 500);
   const functionUrl = `${supabaseUrl}/functions/v1/toss-payment`;
@@ -35,42 +38,49 @@ export default {
         if (!paymentKey || !orderId || !Number.isInteger(amount)) return json({ error: '결제 승인 정보가 올바르지 않아요.' }, 400);
 
         const { data: order, error: orderError } = await admin.from('orders')
-          .select('id,order_number,status,total_amount,payment_status')
+          .select('id,order_number,status,total_amount,payment_status,updated_at')
           .eq('id', orderId)
           .eq('user_id', authData.user.id)
           .single();
         if (orderError) return json({ error: '주문을 찾을 수 없어요.' }, 404);
-        if (!order || order.total_amount !== amount) return json({ error: '주문 금액이 일치하지 않아요.' }, 400);
-        if (order.payment_status === 'paid') return json({ ok: true });
-        if (order.status === 'cancelled' || ['cancelled', 'refunded'].includes(order.payment_status)) {
+        if (!order) return json({ error: '주문을 찾을 수 없어요.' }, 404);
+
+        const confirmationDecision = decidePaymentConfirmation(order, amount);
+        if (confirmationDecision === 'amount_mismatch') return json({ error: '주문 금액이 일치하지 않아요.' }, 400);
+        if (confirmationDecision === 'already_paid') return json({ ok: true });
+        if (confirmationDecision === 'cancelled') {
           return json({ error: '이미 취소된 주문은 결제할 수 없어요.' }, 409);
         }
-        if (order.status !== 'payment_pending' || !['pending', 'failed', 'confirming'].includes(order.payment_status)) {
+        if (confirmationDecision === 'in_progress') {
+          return json({ error: '결제 확인이 진행 중이에요. 잠시 후 다시 확인해주세요.' }, 409);
+        }
+        if (confirmationDecision === 'invalid_state') {
           return json({ error: '현재 주문 상태에서는 결제를 확인할 수 없어요.' }, 409);
         }
 
         const secret = Deno.env.get('TOSS_SECRET_KEY');
         if (!secret) return json({ error: '결제 서버 설정을 확인해주세요.' }, 500);
 
-        if (order.payment_status !== 'confirming') {
-          const { data: claimedOrder, error: claimError } = await admin.from('orders')
-            .update({ payment_status: 'confirming' })
+        let claimQuery = admin.from('orders')
+          .update({ payment_status: 'confirming' })
+          .eq('id', orderId)
+          .eq('user_id', authData.user.id)
+          .eq('status', 'payment_pending');
+
+        claimQuery = confirmationDecision === 'recover'
+          ? claimQuery.eq('payment_status', 'confirming').eq('updated_at', order.updated_at)
+          : claimQuery.in('payment_status', ['pending', 'failed']);
+
+        const { data: claimedOrder, error: claimError } = await claimQuery.select('id').maybeSingle();
+        if (claimError) throw claimError;
+        if (!claimedOrder) {
+          const { data: latestOrder } = await admin.from('orders')
+            .select('status,payment_status')
             .eq('id', orderId)
             .eq('user_id', authData.user.id)
-            .eq('status', 'payment_pending')
-            .in('payment_status', ['pending', 'failed'])
-            .select('id')
             .maybeSingle();
-          if (claimError) throw claimError;
-          if (!claimedOrder) {
-            const { data: latestOrder } = await admin.from('orders')
-              .select('status,payment_status')
-              .eq('id', orderId)
-              .eq('user_id', authData.user.id)
-              .maybeSingle();
-            if (latestOrder?.payment_status === 'paid') return json({ ok: true });
-            return json({ error: '결제 또는 취소 처리가 진행 중이에요. 잠시 후 다시 확인해주세요.' }, 409);
-          }
+          if (latestOrder?.payment_status === 'paid') return json({ ok: true });
+          return json({ error: '결제 또는 취소 처리가 진행 중이에요. 잠시 후 다시 확인해주세요.' }, 409);
         }
 
         let confirm: Response;

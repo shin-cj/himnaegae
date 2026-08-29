@@ -2,6 +2,17 @@
 
 Edge Function 소스는 모두 이 저장소의 `supabase/functions`에서 관리합니다.
 
+## 결제·취소 안전성 검사
+
+배포 전에 프로젝트 루트에서 Edge Function 타입 검사와 예외 처리 테스트를 실행합니다.
+
+```powershell
+npx -y deno check supabase/functions/toss-payment/index.ts supabase/functions/cancel-payment/index.ts
+npx -y deno test supabase/tests/payment-safety.test.ts
+```
+
+테스트는 금액 불일치, 중복 결제 확인, 중단된 처리 복구, 주문 소유권, 제조 시작 후 고객 취소 차단, 중복 취소를 검증합니다.
+
 ## 최초 한 번
 
 VS Code 터미널을 프로젝트 루트(`himnaegae`)에서 열고 로그인합니다.
