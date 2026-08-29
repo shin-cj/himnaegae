@@ -5,24 +5,24 @@
     "scheme": "himnaegae",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-v2.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.himnaegae.cafe"
     },
     "android": {
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#FFF8EC",
+        "foregroundImage": "./assets/android-icon-foreground-v2.png",
+        "monochromeImage": "./assets/android-icon-monochrome-v2.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.himnaegae.cafe"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/icon-v2.png"
     },
     "plugins": [
       "expo-web-browser",
@@ -32,6 +32,15 @@
         {
           "color": "#EF7045",
           "defaultChannel": "orders"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFF8EC",
+          "image": "./assets/android-icon-foreground-v2.png",
+          "imageWidth": 180,
+          "resizeMode": "contain"
         }
       ]
     ],

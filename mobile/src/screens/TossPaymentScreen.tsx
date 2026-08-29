@@ -66,10 +66,15 @@ export function TossPaymentScreen({ session, onClose, onSuccess, onFail }: Props
   }, [session]);
 
   const openPaymentApp = (url: string) => {
+    const paymentAppName = url.startsWith('supertoss:') || url.startsWith('toss:')
+      ? '토스 앱'
+      : url.startsWith('kakaotalk:') || url.startsWith('kakaopay:')
+        ? '카카오페이 앱'
+        : '선택한 결제 앱';
     void Linking.openURL(url).catch(() => {
       Alert.alert(
         '결제 앱을 열 수 없어요',
-        '카카오페이 앱이 설치되어 있는지 확인하거나 다른 결제수단을 선택해주세요.',
+        `${paymentAppName}이 설치되어 있는지 확인하거나 다른 결제수단을 선택해주세요.`,
       );
     });
   };

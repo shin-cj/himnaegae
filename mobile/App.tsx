@@ -15,6 +15,7 @@ import { NotificationCenterScreen } from './src/screens/NotificationCenterScreen
 import { MyScreen } from './src/screens/MyScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
 import { PasswordRecoveryScreen } from './src/screens/PasswordRecoveryScreen';
+import { PrivacyPolicyScreen } from './src/screens/PrivacyPolicyScreen';
 import { TossPaymentScreen, type TossPaymentSession } from './src/screens/TossPaymentScreen';
 import { supabase } from './src/lib/supabase';
 import { addNotificationTapListener, getNotificationPermission, registerForOrderNotifications, showOrderStatusNotification, usesExpoGo } from './src/lib/notifications';
@@ -53,7 +54,7 @@ export default function App() {
 }
 
 function AppContent() {
-  const { passwordRecovery, user } = useAuth();
+  const { acceptPrivacyPolicy, passwordRecovery, privacyConsentRequired, user } = useAuth();
   const pagerRef = useRef<PagerView>(null);
   const [activeTab, setActiveTab] = useState<AppTab>('home');
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -64,12 +65,27 @@ function AppContent() {
   const [pickupDelay, setPickupDelay] = useState<PickupChoice>(0);
   const [customPickupTime, setCustomPickupTime] = useState(defaultCustomPickupTime);
   const [paymentSession, setPaymentSession] = useState<TossPaymentSession | null>(null);
+  const paymentStartingRef = useRef(false);
+  const paymentRequestIdRef = useRef<string | null>(null);
+  const abandoningPaymentRef = useRef(new Set<string>());
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [notificationOrderId, setNotificationOrderId] = useState<string | null>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [ordersRefreshToken, setOrdersRefreshToken] = useState(0);
   const [catalogMenus, setCatalogMenus] = useState<Menu[]>(fallbackMenus);
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(defaultStoreSettings);
+  const [savingPrivacyConsent, setSavingPrivacyConsent] = useState(false);
+
+  const acceptCurrentPrivacyPolicy = async () => {
+    try {
+      setSavingPrivacyConsent(true);
+      await acceptPrivacyPolicy();
+    } catch (error) {
+      Alert.alert('동의 내용을 저장하지 못했어요', error instanceof Error ? error.message : '잠시 후 다시 시도해주세요.');
+    } finally {
+      setSavingPrivacyConsent(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -212,6 +228,17 @@ function AppContent() {
   }, [user]);
 
   useEffect(() => {
+    if (!user) return;
+    void supabase.functions.invoke('toss-payment', {
+      body: { action: 'cleanup-pending' },
+    }).then(({ data }) => {
+      if (Number(data?.cancelledCount ?? 0) > 0) {
+        setOrdersRefreshToken((current) => current + 1);
+      }
+    });
+  }, [user]);
+
+  useEffect(() => {
     if (!user) { setUnreadNotifications(0); return; }
     const loadUnread = async () => {
       const { count } = await supabase
@@ -229,6 +256,7 @@ function AppContent() {
   }, [user]);
 
   const payForTestOrder = () => {
+    if (paymentStartingRef.current || paying || paymentSession) return;
     if (storeSettings.businessStatus !== 'open') {
       Alert.alert(storeSettings.businessStatus === 'paused' ? '지금은 주문을 잠시 쉬고 있어요' : '오늘 영업이 끝났어요', '매장이 주문을 다시 시작하면 이용해주세요.');
       return;
@@ -240,8 +268,17 @@ function AppContent() {
       return;
     }
 
+    paymentStartingRef.current = true;
+    paymentRequestIdRef.current = `checkout-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     Alert.alert('테스트 결제', `${cartTotal.toLocaleString('ko-KR')}원을 테스트 결제할까요?\n실제 돈은 결제되지 않아요.`, [
-      { text: '취소', style: 'cancel' },
+      {
+        text: '취소',
+        style: 'cancel',
+        onPress: () => {
+          paymentStartingRef.current = false;
+          paymentRequestIdRef.current = null;
+        },
+      },
       {
         text: '결제하기',
         onPress: async () => {
@@ -251,7 +288,7 @@ function AppContent() {
             if (!tossClientKey) throw new Error('토스 클라이언트 키가 없어요.');
             const pickupAt = resolvePickupTime(pickupDelay, customPickupTime);
             const { data, error } = await supabase.functions.invoke('toss-payment', {
-              body: { pickup_at: pickupAt.toISOString(), pickup_type: pickupDelay === 0 ? 'asap' : 'scheduled', items: cart.map((item) => ({
+              body: { request_id: paymentRequestIdRef.current, pickup_at: pickupAt.toISOString(), pickup_type: pickupDelay === 0 ? 'asap' : 'scheduled', items: cart.map((item) => ({
                 menu_id: item.menuId,
                 menu_name: item.menuName,
                 temperature: item.temperature,
@@ -282,6 +319,8 @@ function AppContent() {
             setCartVisible(false);
             setTimeout(() => setPaymentSession(nextPaymentSession), 450);
           } catch (error) {
+            paymentStartingRef.current = false;
+            paymentRequestIdRef.current = null;
             Alert.alert('테스트 결제 실패', error instanceof Error ? error.message : '다시 시도해주세요.');
           } finally {
             setPaying(false);
@@ -310,13 +349,35 @@ function AppContent() {
     } catch (error) {
       Alert.alert('결제 승인 실패', error instanceof Error ? error.message : '다시 시도해주세요.');
     } finally {
+      paymentStartingRef.current = false;
+      paymentRequestIdRef.current = null;
       setPaying(false);
     }
   };
 
+  const abandonPendingPayment = async (target: TossPaymentSession) => {
+    if (abandoningPaymentRef.current.has(target.orderId)) return;
+    abandoningPaymentRef.current.add(target.orderId);
+    try {
+      const { data: refreshedData } = await supabase.auth.refreshSession();
+      if (!refreshedData.session) return;
+      await supabase.functions.invoke('toss-payment', {
+        headers: { Authorization: `Bearer ${refreshedData.session.access_token}` },
+        body: { action: 'abandon', orderId: target.orderId },
+      });
+      setOrdersRefreshToken((current) => current + 1);
+    } finally {
+      abandoningPaymentRef.current.delete(target.orderId);
+    }
+  };
+
   const closePayment = (message?: string) => {
+    const abandonedSession = paymentSession;
+    paymentStartingRef.current = false;
+    paymentRequestIdRef.current = null;
     setPaymentSession(null);
     setTimeout(() => setCartVisible(true), 450);
+    if (abandonedSession) void abandonPendingPayment(abandonedSession);
     if (message) Alert.alert('결제가 완료되지 않았어요', message);
   };
 
@@ -324,6 +385,9 @@ function AppContent() {
     <View style={styles.app}>
       <Modal visible={passwordRecovery} animationType="slide" presentationStyle="fullScreen">
         <PasswordRecoveryScreen />
+      </Modal>
+      <Modal visible={Boolean(user && privacyConsentRequired && !passwordRecovery)} animationType="slide" presentationStyle="fullScreen">
+        <PrivacyPolicyScreen accepting={savingPrivacyConsent} onAccept={() => void acceptCurrentPrivacyPolicy()} />
       </Modal>
           <StatusBar style="dark" />
           <PagerView

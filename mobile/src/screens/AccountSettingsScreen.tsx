@@ -13,6 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
+import { getPasswordValidationError } from '../lib/password';
 import { colors } from '../theme/colors';
 
 type EditingSection = 'nickname' | 'password' | 'delete' | null;
@@ -69,8 +70,9 @@ export function AccountSettingsScreen({ onClose }: { onClose: () => void }) {
       Alert.alert('현재 비밀번호 확인', '현재 사용 중인 비밀번호를 입력해주세요.');
       return;
     }
-    if (newPassword.length < 8) {
-      Alert.alert('새 비밀번호 확인', '새 비밀번호는 8글자 이상 입력해주세요.');
+    const passwordError = getPasswordValidationError(newPassword);
+    if (passwordError) {
+      Alert.alert('새 비밀번호 확인', passwordError);
       return;
     }
     if (currentPassword === newPassword) {
@@ -175,7 +177,7 @@ export function AccountSettingsScreen({ onClose }: { onClose: () => void }) {
         {editing === 'password' ? (
           <View style={styles.editorCard}>
             <Field label="현재 비밀번호" value={currentPassword} onChangeText={setCurrentPassword} secureTextEntry autoCapitalize="none" />
-            <Field label="새 비밀번호" value={newPassword} onChangeText={setNewPassword} secureTextEntry autoCapitalize="none" placeholder="8글자 이상" />
+            <Field label="새 비밀번호" value={newPassword} onChangeText={setNewPassword} secureTextEntry autoCapitalize="none" placeholder="10글자 이상 · 문자 종류 2개 이상" />
             <Field label="새 비밀번호 확인" value={newPasswordCheck} onChangeText={setNewPasswordCheck} secureTextEntry autoCapitalize="none" />
             <SubmitButton label="비밀번호 변경" loading={submitting} onPress={savePassword} />
           </View>

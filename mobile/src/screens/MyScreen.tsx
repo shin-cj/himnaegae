@@ -7,6 +7,7 @@ import { getNotificationPermission, registerForOrderNotifications } from '../lib
 import { colors } from '../theme/colors';
 import { AccountSettingsScreen } from './AccountSettingsScreen';
 import { AuthScreen } from './AuthScreen';
+import { PrivacyPolicyScreen } from './PrivacyPolicyScreen';
 
 export function MyScreen() {
   const insets = useSafeAreaInsets();
@@ -15,6 +16,7 @@ export function MyScreen() {
   const [notificationMessage, setNotificationMessage] = useState('음료가 준비되면 바로 알려드려요.');
   const [enablingNotification, setEnablingNotification] = useState(false);
   const [accountSettingsVisible, setAccountSettingsVisible] = useState(false);
+  const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
 
   useEffect(() => {
     void getNotificationPermission().then(setNotificationEnabled).catch(() => setNotificationEnabled(false));
@@ -76,11 +78,21 @@ export function MyScreen() {
         </View>
         <Text style={styles.accountChevron}>›</Text>
       </Pressable>
+      <Pressable onPress={() => setPrivacyPolicyVisible(true)} style={({ pressed }) => [styles.accountButton, pressed && styles.pressed]}>
+        <View>
+          <Text style={styles.accountButtonTitle}>개인정보 처리방침</Text>
+          <Text style={styles.accountButtonDescription}>수집 정보·이용 목적·보관 기간 확인</Text>
+        </View>
+        <Text style={styles.accountChevron}>›</Text>
+      </Pressable>
       <Pressable onPress={handleSignOut} style={({ pressed }) => [styles.logoutButton, pressed && styles.pressed]}>
         <Text style={styles.logoutText}>로그아웃</Text>
       </Pressable>
       <Modal visible={accountSettingsVisible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setAccountSettingsVisible(false)}>
         <AccountSettingsScreen onClose={() => setAccountSettingsVisible(false)} />
+      </Modal>
+      <Modal visible={privacyPolicyVisible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setPrivacyPolicyVisible(false)}>
+        <PrivacyPolicyScreen onClose={() => setPrivacyPolicyVisible(false)} />
       </Modal>
     </View>
   );

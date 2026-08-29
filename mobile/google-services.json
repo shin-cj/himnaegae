@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1049842059943",
+    "project_id": "himnaegae-edb0b",
+    "storage_bucket": "himnaegae-edb0b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1049842059943:android:ccb62d941ceb652c9ae982",
+        "android_client_info": {
+          "package_name": "com.himnaegae.cafe"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCEtdYIrgtfFgVBdEdlpsAmpSmETagTM1U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

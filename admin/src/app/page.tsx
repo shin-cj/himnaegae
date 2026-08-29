@@ -270,7 +270,15 @@ export default function Home() {
       ];
 
       if (notificationStatuses.includes(status)) {
+        const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError || !refreshedData.session) {
+          setError('주문 상태는 변경됐지만 로그인 시간이 만료되어 고객 알림을 보내지 못했어요.');
+          await loadOrders();
+          setUpdatingId(null);
+          return;
+        }
         const { error: notificationError } = await supabase.functions.invoke('send-order-notification', {
+          headers: { Authorization: `Bearer ${refreshedData.session.access_token}` },
           body: { orderId },
         });
 

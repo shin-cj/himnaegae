@@ -5,6 +5,8 @@ import { createContext, type ReactNode, useContext, useEffect, useMemo, useState
 import { Alert, AppState, Platform } from 'react-native';
 
 import { supabase } from '../lib/supabase';
+import { getPasswordValidationError } from '../lib/password';
+import { PRIVACY_POLICY_VERSION } from '../lib/privacy';
 import {
   clearStoredOrderNotificationToken,
   unregisterAllOrderNotifications,
@@ -18,6 +20,8 @@ type AuthContextValue = {
   user: User | null;
   loading: boolean;
   passwordRecovery: boolean;
+  privacyConsentRequired: boolean;
+  acceptPrivacyPolicy: () => Promise<void>;
   signUp: (email: string, password: string, nickname: string) => Promise<SignUpResult>;
   signIn: (email: string, password: string) => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
@@ -46,6 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
+  const [privacyConsentRequired, setPrivacyConsentRequired] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data, error }) => {
@@ -117,17 +122,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    if (!session?.user.id) {
+      setPrivacyConsentRequired(false);
+      return () => { active = false; };
+    }
+
+    void supabase
+      .from('privacy_consents')
+      .select('policy_version')
+      .eq('user_id', session.user.id)
+      .eq('policy_version', PRIVACY_POLICY_VERSION)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (active) setPrivacyConsentRequired(Boolean(error || !data));
+      });
+
+    return () => { active = false; };
+  }, [session?.user.id]);
+
   const value = useMemo<AuthContextValue>(() => ({
     session,
     user: session?.user ?? null,
     loading,
     passwordRecovery,
+    privacyConsentRequired,
+    async acceptPrivacyPolicy() {
+      const { error } = await supabase.rpc('accept_privacy_policy', {
+        p_policy_version: PRIVACY_POLICY_VERSION,
+      });
+      if (error) throw error;
+      setPrivacyConsentRequired(false);
+    },
     async signUp(email, password, nickname) {
+      const passwordError = getPasswordValidationError(password);
+      if (passwordError) throw new Error(passwordError);
       const { data, error } = await supabase.auth.signUp({
         email: email.trim().toLowerCase(),
         password,
         options: {
-          data: { nickname: nickname.trim() },
+          data: {
+            nickname: nickname.trim(),
+            privacy_policy_version: PRIVACY_POLICY_VERSION,
+            privacy_consent: true,
+          },
           emailRedirectTo: createAuthRedirectUrl('auth-confirm'),
         },
       });
@@ -149,6 +188,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
     },
     async updateRecoveredPassword(password) {
+      const passwordError = getPasswordValidationError(password);
+      if (passwordError) throw new Error(passwordError);
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
       setPasswordRecovery(false);
@@ -170,6 +211,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
     },
     async updatePassword(currentPassword, newPassword) {
+      const passwordError = getPasswordValidationError(newPassword);
+      if (passwordError) throw new Error(passwordError);
       const { error } = await supabase.auth.updateUser({
         password: newPassword,
         current_password: currentPassword,
@@ -216,7 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await clearStoredOrderNotificationToken();
       await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
     },
-  }), [loading, passwordRecovery, session]);
+  }), [loading, passwordRecovery, privacyConsentRequired, session]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
